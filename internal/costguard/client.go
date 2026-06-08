@@ -102,10 +102,16 @@ func (c *Client) do(ctx context.Context, url string, body []byte) (*http.Respons
 		return nil, fmt.Errorf("costguard: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Costguard-Agent", "forge")
+	req.Header.Set("X-Costguard-Agent", c.cfg.CostguardAgent)
 	req.Header.Set("X-Costguard-Mode", c.cfg.Mode)
-	if c.cfg.CostguardAPIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.CostguardAPIKey)
+	if c.cfg.CostguardProvider != "" {
+		req.Header.Set("X-Costguard-Provider", c.cfg.CostguardProvider)
+	}
+	if c.cfg.CostguardTeam != "" {
+		req.Header.Set("X-Costguard-Team", c.cfg.CostguardTeam)
+	}
+	if c.cfg.CostguardProject != "" {
+		req.Header.Set("X-Costguard-Project", c.cfg.CostguardProject)
 	}
 	return c.http.Do(req)
 }

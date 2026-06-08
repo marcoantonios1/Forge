@@ -8,30 +8,48 @@ import (
 )
 
 type Config struct {
-	CostguardURL    string
-	CostguardAPIKey string
-	Mode            string
-	Timeout         time.Duration
-	MaxRetries      int
-	Debug           bool
+	CostguardURL      string
+	Mode              string
+	CostguardAgent    string
+	CostguardProvider string
+	CostguardTeam     string
+	CostguardProject  string
+	Timeout           time.Duration
+	MaxRetries        int
+	Debug             bool
+	CompilerModel     string
 }
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		CostguardURL: "http://localhost:8080",
-		Mode:         "balanced",
-		Timeout:      60 * time.Second,
-		MaxRetries:   3,
+		CostguardURL:   "http://localhost:8080",
+		Mode:           "balanced",
+		CostguardAgent: "forge",
+		Timeout:        60 * time.Second,
+		MaxRetries:     3,
+		CompilerModel:  "claude-haiku-4-5-20251001",
 	}
 
 	if v := os.Getenv("COSTGUARD_URL"); v != "" {
 		cfg.CostguardURL = v
 	}
-	if v := os.Getenv("COSTGUARD_API_KEY"); v != "" {
-		cfg.CostguardAPIKey = v
-	}
 	if v := os.Getenv("COSTGUARD_MODE"); v != "" {
 		cfg.Mode = v
+	}
+	if v := os.Getenv("COSTGUARD_AGENT"); v != "" {
+		cfg.CostguardAgent = v
+	}
+	if v := os.Getenv("COSTGUARD_PROVIDER"); v != "" {
+		cfg.CostguardProvider = v
+	}
+	if v := os.Getenv("COSTGUARD_TEAM"); v != "" {
+		cfg.CostguardTeam = v
+	}
+	if v := os.Getenv("COSTGUARD_PROJECT"); v != "" {
+		cfg.CostguardProject = v
+	}
+	if v := os.Getenv("COMPILER_MODEL"); v != "" {
+		cfg.CompilerModel = v
 	}
 	if v := os.Getenv("COSTGUARD_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
