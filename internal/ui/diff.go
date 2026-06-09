@@ -24,7 +24,7 @@ func RenderDiff(diff string, colour bool) string {
 		default:
 			rendered = line
 		}
-		sb.WriteString("  " + rendered)
+		sb.WriteString("  ");sb.WriteString(rendered)
 		if i < len(lines)-1 {
 			sb.WriteByte('\n')
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,7 +21,39 @@ type Config struct {
 	CompilerModel     string
 }
 
+// loadDotEnv reads .env from the current directory and sets any variables
+// not already present in the environment. Actual env vars always win.
+func loadDotEnv() {
+	data, err := os.ReadFile(".env")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Strip inline comments (e.g. "VAL=foo  # comment").
+		if idx := strings.Index(line, " #"); idx != -1 {
+			line = strings.TrimSpace(line[:idx])
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if key == "" {
+			continue
+		}
+		if os.Getenv(key) == "" {
+			os.Setenv(key, val)
+		}
+	}
+}
+
 func Load() (*Config, error) {
+	loadDotEnv()
 	cfg := &Config{
 		CostguardURL:   "http://localhost:8080",
 		Mode:           "balanced",

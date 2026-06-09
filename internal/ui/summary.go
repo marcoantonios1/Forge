@@ -24,7 +24,7 @@ func BuildSummary(e events.Event, colour bool) string {
 
 	// Summary sentence.
 	if summary != "" {
-		sb.WriteString("   " + summary + "\n")
+		sb.WriteString("   ");sb.WriteString(summary);sb.WriteString("\n")
 	}
 
 	// Files changed section.
@@ -67,12 +67,12 @@ func buildBox(colour bool) string {
 		top := Colour("╔"+hline+"╗", Bold+Green, colour)
 		mid := Colour("║", Bold+Green, colour) + inner + Colour("║", Bold+Green, colour)
 		bot := Colour("╚"+hline+"╝", Bold+Green, colour)
-		sb.WriteString(top + "\n" + mid + "\n" + bot + "\n")
+		sb.WriteString(top);sb.WriteString("\n");sb.WriteString(mid);sb.WriteString("\n");sb.WriteString(bot);sb.WriteString("\n")
 	} else {
 		hline := strings.Repeat("-", boxWidth)
-		sb.WriteString("+" + hline + "+\n")
-		sb.WriteString("|" + inner + "|\n")
-		sb.WriteString("+" + hline + "+\n")
+		sb.WriteString("+");sb.WriteString(hline);sb.WriteString("+\n")
+		sb.WriteString("|");sb.WriteString(inner);sb.WriteString("|\n")
+		sb.WriteString("+");sb.WriteString(hline);sb.WriteString("+\n")
 	}
 	return sb.String()
 }

@@ -123,10 +123,8 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 					"Could not parse tool call. Use exactly:\nTOOL: <name>\nARGS: {\"key\": \"value\"}"))
 				break
 			}
-			// Inject root into args if the tool accepts it and caller omitted it.
-			if _, hasRoot := call.Args["root"]; !hasRoot {
-				call.Args["root"] = ac.Root
-			}
+			// Always force root to the repo root — the model must not control it.
+			call.Args["root"] = ac.Root
 			result, err := a.registry.Dispatch(ctx, call)
 			ac.History = append(ac.History, ToolResultMessage(call.Name, result, err))
 
