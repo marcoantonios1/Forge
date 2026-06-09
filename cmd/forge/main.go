@@ -9,12 +9,17 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/marcoantonios1/Forge/internal/agent"
+	"github.com/marcoantonios1/Forge/internal/confirm"
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 	"github.com/marcoantonios1/Forge/internal/session"
 	"github.com/marcoantonios1/Forge/internal/ui"
 )
 
-var debugFlag = flag.Bool("debug", false, "enable debug event output")
+var (
+	debugFlag = flag.Bool("debug", false, "enable debug event output")
+	yesFlag   = flag.Bool("yes", false, "approve all patches without prompting")
+)
 
 func main() {
 	flag.Parse()
@@ -24,7 +29,6 @@ func main() {
 		mode = ui.ModeDebug
 	}
 	renderer := ui.New(os.Stdout, mode)
-	_ = renderer // passed to agent in agent execution loop ticket
 
 	id := session.NewID()
 	fmt.Printf("Forge — session %s\n", id)
@@ -41,6 +45,22 @@ func main() {
 			fmt.Printf("Loaded forge.md from %s\n", cfg.Path)
 		}
 	}
+
+	// Confirmer selection — policy-based switching (autonomous vs safe/supervised)
+	// happens per-task in the REPL wiring ticket. For now, --yes selects
+	// AutoConfirmer; otherwise SafeConfirmer is the default.
+	var confirmer agent.PatchConfirmer
+	if *yesFlag {
+		confirmer = confirm.AutoConfirmer{}
+	} else {
+		confirmer = confirm.NewSafeConfirmer(
+			os.Stdin, os.Stderr,
+			ui.IsTTY(os.Stdout),
+			renderer,
+			id,
+		)
+	}
+	_ = confirmer // consumed by agent in REPL wiring ticket
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT)

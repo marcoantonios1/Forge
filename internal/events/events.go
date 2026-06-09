@@ -16,6 +16,8 @@ const (
 	EventFilePatchApplied  EventType = "file.patch.applied"
 	EventFilePatchFailed   EventType = "file.patch.failed"
 	EventFilePatchReverted EventType = "file.patch.reverted"
+
+	EventConfirmDecision EventType = "confirm.decision"
 )
 
 type Event struct {
