@@ -1,0 +1,180 @@
+package tools
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+type ListFilesTool struct{}
+
+func (t *ListFilesTool) Name() string { return "list_files" }
+
+type ListFilesResult struct {
+	Root  string   `json:"root"`
+	Files []string `json:"files"`
+	Count int      `json:"count"`
+}
+
+func (r *ListFilesResult) Summary() string {
+	return fmt.Sprintf("listed %d files", r.Count)
+}
+
+func (t *ListFilesTool) Run(_ context.Context, args map[string]any) (any, error) {
+	root, _ := args["root"].(string)
+	if root == "" {
+		return nil, &ToolError{Tool: t.Name(), Message: "missing required arg: root"}
+	}
+
+	pattern, _ := args["pattern"].(string)
+
+	maxDepth := 5
+	if v, ok := args["max_depth"]; ok {
+		switch n := v.(type) {
+		case int:
+			maxDepth = n
+		case float64:
+			maxDepth = int(n)
+		}
+	}
+
+	includeHidden := false
+	if v, ok := args["include_hidden"].(bool); ok {
+		includeHidden = v
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, &ToolError{Tool: t.Name(), Message: "invalid root", Err: err}
+	}
+
+	info, err := os.Stat(absRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, &ToolError{Tool: t.Name(), Message: "root not found: " + root, Err: err}
+		}
+		return nil, &ToolError{Tool: t.Name(), Message: "stat failed: " + root, Err: err}
+	}
+	if !info.IsDir() {
+		return nil, &ToolError{Tool: t.Name(), Message: "root is not a directory: " + root}
+	}
+
+	ignorePatterns := loadGitignore(absRoot)
+
+	var files []string
+	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+
+		rel, _ := filepath.Rel(absRoot, path)
+		if rel == "." {
+			return nil
+		}
+
+		name := d.Name()
+
+		// Hidden check.
+		if !includeHidden && strings.HasPrefix(name, ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Depth check.
+		if maxDepth > 0 {
+			depth := strings.Count(rel, string(filepath.Separator))
+			if d.IsDir() && depth >= maxDepth {
+				return filepath.SkipDir
+			}
+		}
+
+		// .gitignore check.
+		if matchesGitignore(rel, d.IsDir(), ignorePatterns) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		// Glob pattern filter against base name.
+		if pattern != "" {
+			matched, err := filepath.Match(pattern, name)
+			if err != nil {
+				return nil
+			}
+			if !matched {
+				return nil
+			}
+		}
+
+		files = append(files, rel)
+		return nil
+	})
+	if err != nil {
+		return nil, &ToolError{Tool: t.Name(), Message: "walk failed", Err: err}
+	}
+
+	sort.Strings(files)
+	return &ListFilesResult{Root: absRoot, Files: files, Count: len(files)}, nil
+}
+
+func loadGitignore(root string) []string {
+	f, err := os.Open(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var patterns []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "!") {
+			// TODO: negation patterns are out of scope — skip silently.
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	return patterns
+}
+
+func matchesGitignore(rel string, isDir bool, patterns []string) bool {
+	base := filepath.Base(rel)
+	for _, p := range patterns {
+		// Directory pattern ("vendor/").
+		if strings.HasSuffix(p, "/") {
+			dirPat := strings.TrimSuffix(p, "/")
+			if isDir && (base == dirPat || rel == dirPat) {
+				return true
+			}
+			// Also skip files under a matched directory.
+			if strings.HasPrefix(rel, dirPat+string(filepath.Separator)) {
+				return true
+			}
+			continue
+		}
+		// Glob match against base name.
+		if matched, _ := filepath.Match(p, base); matched {
+			return true
+		}
+		// Exact relative path match.
+		if rel == p {
+			return true
+		}
+	}
+	return false
+}
