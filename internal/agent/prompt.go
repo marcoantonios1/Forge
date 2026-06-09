@@ -16,7 +16,7 @@ You never produce prose explanations — only tool calls or one of the terminal 
 Available tools and their required arguments:
 
   read_file
-    ARGS: {"path": "<relative file path>", "root": "<repo root>", "max_lines": <int, optional>}
+    ARGS: {"path": "<relative file path>", "root": "<repo root>", "max_lines": <int, optional, default 2000 — omit unless you need less>}
 
   list_files
     ARGS: {"root": "<directory>", "pattern": "<glob, optional>", "max_depth": <int, optional>}
