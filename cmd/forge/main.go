@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,9 +11,21 @@ import (
 
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 	"github.com/marcoantonios1/Forge/internal/session"
+	"github.com/marcoantonios1/Forge/internal/ui"
 )
 
+var debugFlag = flag.Bool("debug", false, "enable debug event output")
+
 func main() {
+	flag.Parse()
+
+	mode := ui.ModeHuman
+	if *debugFlag {
+		mode = ui.ModeDebug
+	}
+	renderer := ui.New(os.Stdout, mode)
+	_ = renderer // passed to agent in agent execution loop ticket
+
 	id := session.NewID()
 	fmt.Printf("Forge — session %s\n", id)
 
@@ -42,7 +55,6 @@ func main() {
 		fmt.Print("> ")
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			// EOF (Ctrl+D)
 			fmt.Println("\nbye.")
 			return
 		}
