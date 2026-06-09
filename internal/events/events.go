@@ -11,6 +11,11 @@ const (
 	EventPlanCreated  EventType = "plan.created"
 	EventTaskComplete EventType = "task.completed"
 	EventTaskFailed   EventType = "task.failed"
+
+	EventFilePatchCreated  EventType = "file.patch.created"
+	EventFilePatchApplied  EventType = "file.patch.applied"
+	EventFilePatchFailed   EventType = "file.patch.failed"
+	EventFilePatchReverted EventType = "file.patch.reverted"
 )
 
 type Event struct {
