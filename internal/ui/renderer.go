@@ -75,6 +75,25 @@ func (r *Renderer) Emit(e events.Event) {
 		line = BuildSummary(e, r.colour)
 	case events.EventTaskFailed:
 		line = formatTaskFailed(e, r.colour)
+	case events.EventConfirmDecision:
+		decision, _ := e.Payload["decision"].(string)
+		files := extractStringSlice(e.Payload["files"])
+		switch decision {
+		case "approved":
+			line = fmt.Sprintf("  %s  patch approved  (%d file(s))",
+				glyph("✔", "+", r.colour), len(files))
+			line = Colour(line, Green, r.colour)
+		case "approved-all":
+			line = fmt.Sprintf("  %s  approved all patches for session",
+				glyph("✔", "+", r.colour))
+			line = Colour(line, Green, r.colour)
+		case "declined":
+			line = fmt.Sprintf("  %s  patch declined",
+				glyph("✘", "x", r.colour))
+			line = Colour(line, Yellow, r.colour)
+		default:
+			return
+		}
 	default:
 		return // skip unknown events silently in human/plain mode
 	}
