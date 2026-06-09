@@ -102,6 +102,7 @@ func (c *Client) do(ctx context.Context, url string, body []byte) (*http.Respons
 		return nil, fmt.Errorf("costguard: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("X-Costguard-Agent", c.cfg.CostguardAgent)
 	req.Header.Set("X-Costguard-Mode", c.cfg.Mode)
 	if c.cfg.CostguardProvider != "" {
