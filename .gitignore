@@ -1,6 +1,7 @@
 # Secrets and local config
 .env
 config.json
+_smoke
 
 # macOS
 .DS_Store
