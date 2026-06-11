@@ -5,21 +5,24 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/marcoantonios1/Forge/internal/confirm"
 	"github.com/marcoantonios1/Forge/internal/events"
 	"github.com/marcoantonios1/Forge/internal/tools"
 )
 
-type ToolCall struct {
-	Name string
-	Args map[string]any
-}
+// ToolCall aliases tools.ToolCall so existing agent code is unchanged.
+type ToolCall = tools.ToolCall
 
 type Registry struct {
 	runners map[string]*tools.ToolRunner
+	gate    *confirm.PermissionGate // nil = no gating (autonomous / headless)
 }
 
-func NewRegistry(root string, emitter events.Emitter, sessionID string) *Registry {
-	reg := &Registry{runners: make(map[string]*tools.ToolRunner)}
+func NewRegistry(root string, emitter events.Emitter, sessionID string, gate *confirm.PermissionGate) *Registry {
+	reg := &Registry{
+		runners: make(map[string]*tools.ToolRunner),
+		gate:    gate,
+	}
 
 	register := func(t tools.Tool) {
 		reg.runners[t.Name()] = tools.NewRunner(t, emitter, sessionID)
@@ -39,6 +42,15 @@ func NewRegistry(root string, emitter events.Emitter, sessionID string) *Registr
 }
 
 func (r *Registry) Dispatch(ctx context.Context, call ToolCall) (any, error) {
+	if r.gate != nil {
+		return r.gate.Dispatch(ctx, call, r)
+	}
+	return r.DispatchDirect(ctx, call)
+}
+
+// DispatchDirect bypasses the gate and runs the tool directly.
+// Called by PermissionGate after the user approves a call.
+func (r *Registry) DispatchDirect(ctx context.Context, call tools.ToolCall) (any, error) {
 	runner, ok := r.runners[call.Name]
 	if !ok {
 		return nil, &tools.ToolError{Tool: call.Name, Message: "unknown tool: " + call.Name}
