@@ -90,6 +90,7 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		// a) FORGE_DONE
 		case strings.HasPrefix(response, "FORGE_DONE:"):
 			summary := strings.TrimSpace(strings.TrimPrefix(response, "FORGE_DONE:"))
+			ac.LastSummary = summary
 			a.emitter.Emit(events.Event{
 				Type:      events.EventTaskComplete,
 				Timestamp: time.Now(),

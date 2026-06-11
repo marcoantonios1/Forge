@@ -18,6 +18,7 @@ type AgentContext struct {
 	Patches       *patch.PatchHistory
 	Iteration     int
 	StartedAt     time.Time
+	LastSummary   string // populated by agent.Run() on FORGE_DONE
 }
 
 func NewAgentContext(

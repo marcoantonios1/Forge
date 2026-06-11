@@ -19,6 +19,7 @@ type Config struct {
 	MaxRetries        int
 	Debug             bool
 	CompilerModel     string
+	AgentModel        string
 }
 
 // loadDotEnv reads .env from the current directory and sets any variables
@@ -61,6 +62,7 @@ func Load() (*Config, error) {
 		Timeout:        60 * time.Second,
 		MaxRetries:     3,
 		CompilerModel:  "claude-haiku-4-5-20251001",
+		AgentModel:     "claude-sonnet-4-6",
 	}
 
 	if v := os.Getenv("COSTGUARD_URL"); v != "" {
