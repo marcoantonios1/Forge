@@ -61,7 +61,7 @@ func Load() (*Config, error) {
 		CostguardAgent: "forge",
 		Timeout:        60 * time.Second,
 		MaxRetries:     3,
-		CompilerModel:  "claude-haiku-4-5-20251001",
+		CompilerModel:  "claude-sonnet-4-6",
 		AgentModel:     "claude-sonnet-4-6",
 	}
 
@@ -82,6 +82,10 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("COSTGUARD_PROJECT"); v != "" {
 		cfg.CostguardProject = v
+	}
+	// COMPILER_MODEL kept for backwards compatibility with existing .env files.
+	if v := os.Getenv("COMPILER_MODEL"); v != "" {
+		cfg.CompilerModel = v
 	}
 	if v := os.Getenv("FORGE_COMPILER_MODEL"); v != "" {
 		cfg.CompilerModel = v
