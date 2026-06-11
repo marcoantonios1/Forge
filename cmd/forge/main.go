@@ -3,12 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -25,9 +27,159 @@ import (
 )
 
 var (
-	debugFlag = flag.Bool("debug", false, "enable debug event output")
-	yesFlag   = flag.Bool("yes", false, "approve all patches without prompting")
+	debugFlag  = flag.Bool("debug", false, "enable debug event output")
+	printFlag  = flag.Bool("print", false, "run a task non-interactively and exit")
+	outputFlag = flag.String("output", "text", "output format in --print mode: text or json")
+	yesFlag    = flag.Bool("yes", false, "approve all patches without prompting")
 )
+
+type headlessResult struct {
+	Status     string   `json:"status"`     // "success" | "failure" | "rejected"
+	Summary    string   `json:"summary"`
+	Files      []string `json:"files"`      // relative paths of files patched
+	Iterations int      `json:"iterations"`
+}
+
+func runHeadless(rawTask, outputFmt string, debug bool) int {
+	// TODO: add --timeout <duration> flag to cancel ctx after a fixed wall-clock duration.
+
+	// 1. Signal handling — Ctrl+C exits with code 130.
+	ctx, cancel := context.WithCancel(context.Background())
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT)
+	go func() {
+		<-sigs
+		fmt.Fprintln(os.Stderr, "\nforge: cancelled")
+		cancel()
+	}()
+	defer signal.Stop(sigs)
+
+	// 2. Session setup.
+	sessionID := session.NewID()
+	cwd, _ := os.Getwd()
+
+	// 3. Renderer — always ModePlain so stdout stays clean for --output json.
+	renderer := ui.New(os.Stdout, ui.ModePlain)
+	var emitter events.Emitter = renderer
+	if debug {
+		debugRenderer := ui.New(os.Stderr, ui.ModeDebug)
+		emitter = events.Multi(renderer, debugRenderer)
+	}
+
+	// 4. Project config.
+	projectCfg, err := projectconfig.Load(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+
+	// 5. Costguard client + compiler.
+	appCfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		return 1
+	}
+	cgClient := costguard.New(appCfg)
+	comp := compiler.New(cgClient, appCfg.CompilerModel, debug)
+
+	// 6. Compile.
+	task, err := comp.Compile(ctx, rawTask)
+	var reject *compiler.RejectionError
+	if errors.As(err, &reject) {
+		writeResult(outputFmt, headlessResult{Status: "rejected", Summary: reject.Reason})
+		return 1
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "compile error: %v\n", err)
+		return 1
+	}
+
+	// 7. Session history + agent setup.
+	sessionHistory := patch.NewPatchHistory()
+	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory)
+
+	registry := agent.NewRegistry(cwd, emitter, sessionID)
+	confirmer := confirm.AutoConfirmer{} // always — no prompts in headless mode
+	agentCfg := agent.Config{
+		Model:     appCfg.AgentModel,
+		MaxIter:   30,
+		AutoApply: true,
+		Debug:     debug,
+	}
+	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer)
+
+	// 8. Run the agent.
+	runErr := ag.Run(ctx, ac)
+
+	// Ctrl+C: context.Canceled → exit 130 (standard shell convention).
+	if runErr != nil && errors.Is(runErr, context.Canceled) {
+		writeResult(outputFmt, headlessResult{Status: "failure", Summary: "cancelled"})
+		return 130
+	}
+
+	// 9. Build result from session history.
+	var files []string
+	for _, rec := range sessionHistory.AllRecords() {
+		if !rec.Reverted {
+			for path := range rec.Originals {
+				files = append(files, path)
+			}
+		}
+	}
+	sort.Strings(files)
+	files = dedup(files)
+
+	status := "success"
+	summary := ac.LastSummary
+	exitCode := 0
+	if runErr != nil {
+		status = "failure"
+		if summary == "" {
+			summary = runErr.Error()
+		}
+		exitCode = 1
+	}
+
+	// 10. Write output and exit.
+	writeResult(outputFmt, headlessResult{
+		Status:     status,
+		Summary:    summary,
+		Files:      files,
+		Iterations: ac.Iteration,
+	})
+	return exitCode
+}
+
+func writeResult(format string, r headlessResult) {
+	// TODO: add --output jsonl (one JSON event per line) for streaming pipeline consumption.
+	if format == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(r) //nolint:errcheck
+		return
+	}
+	fmt.Printf("status:     %s\n", r.Status)
+	fmt.Printf("summary:    %s\n", r.Summary)
+	if len(r.Files) > 0 {
+		fmt.Printf("files:\n")
+		for _, f := range r.Files {
+			fmt.Printf("  %s\n", f)
+		}
+	}
+	fmt.Printf("iterations: %d\n", r.Iterations)
+}
+
+func dedup(sorted []string) []string {
+	if len(sorted) == 0 {
+		return sorted
+	}
+	out := sorted[:1]
+	for _, s := range sorted[1:] {
+		if s != out[len(out)-1] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // handleUndo reverts the most recently applied patch set.
 // TODO: extend to support undoing the last N patch sets (multi-level undo).
@@ -48,6 +200,15 @@ func handleUndo(root string, history *patch.PatchHistory, emitter events.Emitter
 
 func main() {
 	flag.Parse()
+
+	if *printFlag {
+		task := strings.Join(flag.Args(), " ")
+		if strings.TrimSpace(task) == "" {
+			fmt.Fprintln(os.Stderr, "forge --print: task argument required")
+			os.Exit(2)
+		}
+		os.Exit(runHeadless(task, *outputFlag, *debugFlag))
+	}
 
 	// 1. Config
 	cfg, err := config.Load()

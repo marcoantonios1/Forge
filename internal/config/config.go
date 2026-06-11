@@ -83,8 +83,11 @@ func Load() (*Config, error) {
 	if v := os.Getenv("COSTGUARD_PROJECT"); v != "" {
 		cfg.CostguardProject = v
 	}
-	if v := os.Getenv("COMPILER_MODEL"); v != "" {
+	if v := os.Getenv("FORGE_COMPILER_MODEL"); v != "" {
 		cfg.CompilerModel = v
+	}
+	if v := os.Getenv("FORGE_AGENT_MODEL"); v != "" {
+		cfg.AgentModel = v
 	}
 	if v := os.Getenv("COSTGUARD_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
