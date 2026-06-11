@@ -313,7 +313,7 @@ func main() {
 
 		// Run agent
 		agentCfg := agent.Config{
-			Model:   cfg.CompilerModel,
+			Model:   cfg.AgentModel,
 			MaxIter: 30,
 			Debug:   cfg.Debug,
 		}
