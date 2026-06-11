@@ -25,6 +25,7 @@ func NewAgentContext(
 	task *compiler.Task,
 	root string,
 	cfg *projectconfig.ProjectConfig,
+	history *patch.PatchHistory,
 ) *AgentContext {
 	return &AgentContext{
 		SessionID:     sessionID,
@@ -32,7 +33,7 @@ func NewAgentContext(
 		Root:          root,
 		ProjectConfig: cfg,
 		History:       []costguard.Message{},
-		Patches:       patch.NewPatchHistory(),
+		Patches:       history,
 		StartedAt:     time.Now(),
 	}
 }

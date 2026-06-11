@@ -17,6 +17,8 @@ import (
 	"github.com/marcoantonios1/Forge/internal/config"
 	"github.com/marcoantonios1/Forge/internal/confirm"
 	"github.com/marcoantonios1/Forge/internal/costguard"
+	"github.com/marcoantonios1/Forge/internal/events"
+	"github.com/marcoantonios1/Forge/internal/patch"
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 	"github.com/marcoantonios1/Forge/internal/session"
 	"github.com/marcoantonios1/Forge/internal/ui"
@@ -26,6 +28,23 @@ var (
 	debugFlag = flag.Bool("debug", false, "enable debug event output")
 	yesFlag   = flag.Bool("yes", false, "approve all patches without prompting")
 )
+
+// handleUndo reverts the most recently applied patch set.
+// TODO: extend to support undoing the last N patch sets (multi-level undo).
+func handleUndo(root string, history *patch.PatchHistory, emitter events.Emitter) {
+	err := history.Undo(root, emitter)
+	if errors.Is(err, patch.ErrNothingToUndo) {
+		fmt.Println("nothing to undo")
+		return
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "undo failed: %v\n", err)
+		return
+	}
+	// EventFilePatchReverted is emitted per file by history.Undo() via the
+	// emitter — the renderer prints each reverted file automatically.
+	fmt.Println("undo complete")
+}
 
 func main() {
 	flag.Parse()
@@ -69,6 +88,10 @@ func main() {
 		fmt.Printf("Loaded forge.md from %s\n", projectCfg.Path)
 	}
 
+	// Session-scoped patch history so undo works across tasks.
+	// TODO: persist undo history across sessions (currently in-memory only).
+	sessionHistory := patch.NewPatchHistory()
+
 	// 8. Confirmer
 	var confirmer agent.PatchConfirmer
 	if *yesFlag {
@@ -105,6 +128,11 @@ func main() {
 			continue
 		}
 
+		if strings.TrimSpace(line) == "undo" {
+			handleUndo(cwd, sessionHistory, renderer)
+			continue
+		}
+
 		ctx := context.Background()
 
 		// Compile
@@ -130,7 +158,7 @@ func main() {
 		}
 		registry := agent.NewRegistry(cwd, renderer, id)
 		a := agent.New(agentCfg, client, registry, renderer, confirmer)
-		ac := agent.NewAgentContext(id, task, cwd, projectCfg)
+		ac := agent.NewAgentContext(id, task, cwd, projectCfg, sessionHistory)
 
 		if err := a.Run(ctx, ac); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %s\n", err)
