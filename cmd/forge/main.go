@@ -58,8 +58,8 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 	sessionID := session.NewID()
 	cwd, _ := os.Getwd()
 
-	// 3. Renderer — always ModePlain so stdout stays clean for --output json.
-	renderer := ui.New(os.Stdout, ui.ModePlain)
+	// 3. Renderer — events go to stderr so stdout is clean for --output json.
+	renderer := ui.New(os.Stderr, ui.ModePlain)
 	var emitter events.Emitter = renderer
 	if debug {
 		debugRenderer := ui.New(os.Stderr, ui.ModeDebug)
