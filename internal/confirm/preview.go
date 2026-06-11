@@ -23,11 +23,11 @@ func RenderPreview(ps *patch.PatchSet, colour bool) string {
 		divider := strings.Repeat("─", max(len(header), 34))
 
 		if colour {
-			sb.WriteString(ui.Colour(header, ui.Bold, true) + "\n")
-			sb.WriteString(ui.Colour(divider, ui.Dim, true) + "\n")
+			sb.WriteString(ui.Colour(header, ui.Bold, true));sb.WriteString("\n")
+			sb.WriteString(ui.Colour(divider, ui.Dim, true));sb.WriteString("\n")
 		} else {
-			sb.WriteString(header + "\n")
-			sb.WriteString(divider + "\n")
+			sb.WriteString(header);sb.WriteString("\n")
+			sb.WriteString(divider);sb.WriteString("\n")
 		}
 
 		diff := reconstructDiff(p)
@@ -63,7 +63,7 @@ func reconstructDiff(p patch.Patch) string {
 	for _, h := range p.Hunks {
 		fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", h.OldStart, h.OldLines, h.NewStart, h.NewLines)
 		for _, line := range h.Lines {
-			sb.WriteString(line + "\n")
+			sb.WriteString(line);sb.WriteString("\n")
 		}
 	}
 	return strings.TrimRight(sb.String(), "\n")
