@@ -18,6 +18,9 @@ const (
 	EventFilePatchReverted EventType = "file.patch.reverted"
 
 	EventConfirmDecision EventType = "confirm.decision"
+
+	EventPermissionGranted EventType = "permission.granted"
+	EventPermissionDenied  EventType = "permission.denied"
 )
 
 type Event struct {
@@ -52,6 +55,34 @@ func ToolOutputEvent(sessionID, toolName string, ok bool, summary string) Event 
 			"tool":    toolName,
 			"ok":      ok,
 			"summary": summary,
+		},
+	}
+}
+
+// PermissionGrantedEvent builds a permission.granted event.
+// scope: "pre-approved" | "session" | "once"
+func PermissionGrantedEvent(sessionID, tool, category, scope string) Event {
+	return Event{
+		Type:      EventPermissionGranted,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload: map[string]any{
+			"tool":     tool,
+			"category": category,
+			"scope":    scope,
+		},
+	}
+}
+
+// PermissionDeniedEvent builds a permission.denied event.
+func PermissionDeniedEvent(sessionID, tool, category string) Event {
+	return Event{
+		Type:      EventPermissionDenied,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload: map[string]any{
+			"tool":     tool,
+			"category": category,
 		},
 	}
 }

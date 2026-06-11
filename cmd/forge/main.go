@@ -27,10 +27,13 @@ import (
 )
 
 var (
-	debugFlag  = flag.Bool("debug", false, "enable debug event output")
-	printFlag  = flag.Bool("print", false, "run a task non-interactively and exit")
-	outputFlag = flag.String("output", "text", "output format in --print mode: text or json")
-	yesFlag    = flag.Bool("yes", false, "approve all patches without prompting")
+	debugFlag        = flag.Bool("debug", false, "enable debug event output")
+	printFlag        = flag.Bool("print", false, "run a task non-interactively and exit")
+	outputFlag       = flag.String("output", "text", "output format in --print mode: text or json")
+	yesFlag          = flag.Bool("yes", false, "approve all patches without prompting")
+	allowedToolsFlag = flag.String("allowed-tools", "", `comma-separated tool categories to pre-approve.
+	Categories: read, git_read, patch. Use "all" to pre-approve everything.
+	Example: --allowed-tools=read,git_read`)
 )
 
 type headlessResult struct {
@@ -97,7 +100,7 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 	sessionHistory := patch.NewPatchHistory()
 	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory)
 
-	registry := agent.NewRegistry(cwd, emitter, sessionID)
+	registry := agent.NewRegistry(cwd, emitter, sessionID, nil) // headless: no permission gate
 	confirmer := confirm.AutoConfirmer{} // always — no prompts in headless mode
 	agentCfg := agent.Config{
 		Model:     appCfg.AgentModel,
@@ -317,7 +320,18 @@ func main() {
 			MaxIter: 30,
 			Debug:   cfg.Debug,
 		}
-		registry := agent.NewRegistry(cwd, renderer, id)
+		preApproved := confirm.ParseAllowedTools(*allowedToolsFlag)
+		interactive := task.ExecutionPolicy != compiler.PolicyAutonomous && !*yesFlag
+		gate := confirm.NewPermissionGate(
+			os.Stdin, os.Stderr,
+			ui.IsTTY(os.Stdout),
+			*debugFlag,
+			renderer,
+			id,
+			preApproved,
+			interactive,
+		)
+		registry := agent.NewRegistry(cwd, renderer, id, gate)
 		a := agent.New(agentCfg, client, registry, renderer, confirmer)
 		ac := agent.NewAgentContext(id, task, cwd, projectCfg, sessionHistory)
 

@@ -163,6 +163,9 @@ func (t *SearchCodeTool) Run(_ context.Context, args map[string]any) (any, error
 				})
 			}
 		}
+		if scanner.Err() != nil {
+			return nil
+		}
 		return nil
 	})
 	if err != nil && !truncated {

@@ -13,6 +13,12 @@ type Tool interface {
 	Run(ctx context.Context, args map[string]any) (any, error)
 }
 
+// ToolCall is a request to invoke a named tool with given arguments.
+type ToolCall struct {
+	Name string
+	Args map[string]any
+}
+
 type ToolError struct {
 	Tool    string
 	Message string

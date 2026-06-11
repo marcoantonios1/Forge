@@ -149,6 +149,9 @@ func loadGitignore(root string) []string {
 		}
 		patterns = append(patterns, line)
 	}
+	if scanner.Err() != nil {
+		return nil
+	}
 	return patterns
 }
 
