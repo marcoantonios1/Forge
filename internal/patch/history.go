@@ -43,6 +43,13 @@ func (h *PatchHistory) Len() int {
 	return len(h.records)
 }
 
+// AllRecords returns all records in the history, oldest first.
+func (h *PatchHistory) AllRecords() []*PatchRecord {
+	out := make([]*PatchRecord, len(h.records))
+	copy(out, h.records)
+	return out
+}
+
 // Undo reverts the most recent non-reverted PatchRecord.
 func (h *PatchHistory) Undo(root string, emitter events.Emitter) error {
 	// Find the most recent non-reverted record.

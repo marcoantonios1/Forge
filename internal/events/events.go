@@ -55,3 +55,16 @@ func ToolOutputEvent(sessionID, toolName string, ok bool, summary string) Event 
 		},
 	}
 }
+
+// Multi fans out Emit calls to all provided emitters.
+type multiEmitter struct{ emitters []Emitter }
+
+func Multi(emitters ...Emitter) Emitter {
+	return &multiEmitter{emitters: emitters}
+}
+
+func (m *multiEmitter) Emit(e Event) {
+	for _, em := range m.emitters {
+		em.Emit(e)
+	}
+}
