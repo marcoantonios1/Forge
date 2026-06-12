@@ -15,15 +15,32 @@ const previewWidth = 50
 func RenderPreview(ps *patch.PatchSet, colour bool) string {
 	var sb strings.Builder
 
-	sb.WriteString(buildPreviewBox(len(ps.Patches), colour))
+	modified, created := 0, 0
+	for _, p := range ps.Patches {
+		if p.IsNew {
+			created++
+		} else {
+			modified++
+		}
+	}
+	sb.WriteString(buildPreviewBox(modified, created, colour))
 	sb.WriteByte('\n')
 
 	for i, p := range ps.Patches {
-		header := fmt.Sprintf("File %d/%d: %s", i+1, len(ps.Patches), p.Path)
+		var header string
+		if p.IsNew {
+			header = fmt.Sprintf("File %d/%d: %s  (new file)", i+1, len(ps.Patches), p.Path)
+		} else {
+			header = fmt.Sprintf("File %d/%d: %s", i+1, len(ps.Patches), p.Path)
+		}
 		divider := strings.Repeat("─", max(len(header), 34))
 
 		if colour {
-			sb.WriteString(ui.Colour(header, ui.Bold, true));sb.WriteString("\n")
+			headerStyle := ui.Bold
+			if p.IsNew {
+				headerStyle = ui.Green
+			}
+			sb.WriteString(ui.Colour(header, headerStyle, true));sb.WriteString("\n")
 			sb.WriteString(ui.Colour(divider, ui.Dim, true));sb.WriteString("\n")
 		} else {
 			sb.WriteString(header);sb.WriteString("\n")
@@ -38,8 +55,16 @@ func RenderPreview(ps *patch.PatchSet, colour bool) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func buildPreviewBox(fileCount int, colour bool) string {
-	body := fmt.Sprintf("  %d file(s) will be modified", fileCount)
+func buildPreviewBox(modified, created int, colour bool) string {
+	var body string
+	switch {
+	case created == 0:
+		body = fmt.Sprintf("  %d file(s) will be modified", modified)
+	case modified == 0:
+		body = fmt.Sprintf("  %d new file(s) will be created", created)
+	default:
+		body = fmt.Sprintf("  %d file(s) modified, %d new file(s)", modified, created)
+	}
 	inner := padRight(body, previewWidth)
 
 	if colour {
@@ -58,7 +83,11 @@ func buildPreviewBox(fileCount int, colour bool) string {
 // reconstructDiff rebuilds unified diff text from Patch.Hunks.
 func reconstructDiff(p patch.Patch) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "--- a/%s\n", p.Path)
+	if p.IsNew {
+		fmt.Fprintf(&sb, "--- /dev/null\n")
+	} else {
+		fmt.Fprintf(&sb, "--- a/%s\n", p.Path)
+	}
 	fmt.Fprintf(&sb, "+++ b/%s\n", p.Path)
 	for _, h := range p.Hunks {
 		fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", h.OldStart, h.OldLines, h.NewStart, h.NewLines)
