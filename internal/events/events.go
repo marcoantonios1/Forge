@@ -22,6 +22,9 @@ const (
 	EventPermissionGranted EventType = "permission.granted"
 	EventPermissionDenied  EventType = "permission.denied"
 
+	EventClarificationAsked    EventType = "clarification.asked"
+	EventClarificationAnswered EventType = "clarification.answered"
+
 	EventGitBranch EventType = "git.branch"
 	EventGitCommit EventType = "git.commit"
 	EventGitPush   EventType = "git.push"
@@ -89,6 +92,24 @@ func PermissionDeniedEvent(sessionID, tool, category string) Event {
 			"tool":     tool,
 			"category": category,
 		},
+	}
+}
+
+func ClarificationAskedEvent(sessionID, question, taskRaw string) Event {
+	return Event{
+		Type:      EventClarificationAsked,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload:   map[string]any{"session_id": sessionID, "question": question, "task_raw": taskRaw},
+	}
+}
+
+func ClarificationAnsweredEvent(sessionID, answer string, refined bool) Event {
+	return Event{
+		Type:      EventClarificationAnswered,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload:   map[string]any{"session_id": sessionID, "answer": answer, "refined": refined},
 	}
 }
 

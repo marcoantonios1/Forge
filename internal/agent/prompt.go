@@ -48,6 +48,16 @@ To signal completion, emit exactly:
 To signal failure, emit exactly:
   FORGE_FAILED: <one-sentence reason>
 
+When execution_policy is "supervised" and you need to resolve ambiguity before
+starting, you may ask one clarifying question in your very first response:
+  FORGE_CLARIFY: <one specific, answerable question>
+
+Rules for FORGE_CLARIFY:
+- Only valid in the very first response when execution_policy is "supervised"
+- Ask at most once — if you have already asked, proceed without asking again
+- The question must be specific and answerable in one sentence
+- If the task is clear enough to proceed, skip FORGE_CLARIFY entirely
+
 Rules:
 - Never emit free-form explanations outside of FORGE_DONE/FORGE_FAILED
 - Never call tools and emit FORGE_DONE in the same response — finish tools first
@@ -56,8 +66,7 @@ Rules:
 - If the task execution_policy is "safe", describe what you would do but wait
   for FORGE_PATCH confirmation before applying`
 
-// TODO: supervised clarification loop — if task.ExecutionPolicy == supervised,
-// ask one follow-up question to resolve ambiguity before beginning execution.
+// Clarification for supervised tasks is handled in agent.clarify() — see agent.go.
 
 func SystemMessage(cfg *projectconfig.ProjectConfig) costguard.Message {
 	content := agentSystemPrompt
