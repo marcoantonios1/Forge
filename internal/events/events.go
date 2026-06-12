@@ -21,6 +21,11 @@ const (
 
 	EventPermissionGranted EventType = "permission.granted"
 	EventPermissionDenied  EventType = "permission.denied"
+
+	EventGitBranch EventType = "git.branch"
+	EventGitCommit EventType = "git.commit"
+	EventGitPush   EventType = "git.push"
+	EventGitStash  EventType = "git.stash"
 )
 
 type Event struct {
@@ -84,6 +89,42 @@ func PermissionDeniedEvent(sessionID, tool, category string) Event {
 			"tool":     tool,
 			"category": category,
 		},
+	}
+}
+
+func GitBranchEvent(sessionID, branch string, checkout bool) Event {
+	return Event{
+		Type:      EventGitBranch,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload:   map[string]any{"session_id": sessionID, "branch": branch, "checkout": checkout},
+	}
+}
+
+func GitCommitEvent(sessionID, hash, message string, files int) Event {
+	return Event{
+		Type:      EventGitCommit,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload:   map[string]any{"session_id": sessionID, "hash": hash, "message": message, "files": files},
+	}
+}
+
+func GitPushEvent(sessionID, remote, branch string) Event {
+	return Event{
+		Type:      EventGitPush,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload:   map[string]any{"session_id": sessionID, "remote": remote, "branch": branch},
+	}
+}
+
+func GitStashEvent(sessionID, action string) Event {
+	return Event{
+		Type:      EventGitStash,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload:   map[string]any{"session_id": sessionID, "action": action},
 	}
 }
 

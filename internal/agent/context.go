@@ -19,6 +19,8 @@ type AgentContext struct {
 	Iteration     int
 	StartedAt     time.Time
 	LastSummary   string // populated by agent.Run() on FORGE_DONE
+	AppliedBranch string // branch created for this task (set post-task)
+	AppliedCommit string // short commit hash (set post-task)
 }
 
 func NewAgentContext(

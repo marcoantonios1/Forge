@@ -34,6 +34,16 @@ func NewRegistry(root string, emitter events.Emitter, sessionID string, gate *co
 	register(&tools.GitStatusTool{})
 	register(&tools.GitDiffTool{})
 	register(&tools.GitLogTool{})
+	register(&tools.GitBranchTool{})
+	register(&tools.GitCheckoutTool{})
+	register(&tools.GitStashTool{})
+	register(&tools.GitPullTool{})
+	// git_commit and git_push are registered for direct dispatch from main.go;
+	// they are intentionally omitted from the agent system prompt so the agent
+	// cannot call them via TOOL: protocol.
+	// TODO: allow agent to call git_commit directly when execution_policy=autonomous.
+	register(&tools.GitCommitTool{})
+	register(&tools.GitPushTool{})
 
 	// Default root for all tools that accept it.
 	_ = root // callers inject "root" into args per-call

@@ -151,6 +151,33 @@ func formatTaskFailed(e events.Event, colour bool) string {
 	return fmt.Sprintf("  %s  %s %s", g, label, Colour(reason, Bold, colour))
 }
 
+func formatGitBranch(e events.Event, colour bool) string {
+	branch := str(e.Payload, "branch")
+	g := glyph("⎇", ">", colour)
+	return fmt.Sprintf("  %s  Branch  %s", g, Colour(branch, Cyan, colour))
+}
+
+func formatGitCommit(e events.Event, colour bool) string {
+	hash := str(e.Payload, "hash")
+	msg := str(e.Payload, "message")
+	g := glyph("✦", "*", colour)
+	return fmt.Sprintf("  %s  Committed  %s %s",
+		g, DimText("["+hash+"]", colour), Colour(msg, Bold, colour))
+}
+
+func formatGitPush(e events.Event, colour bool) string {
+	branch := str(e.Payload, "branch")
+	remote := str(e.Payload, "remote")
+	g := glyph("↑", "^", colour)
+	return fmt.Sprintf("  %s  Pushed  %s  → %s", g, Colour(branch, Cyan, colour), remote)
+}
+
+func formatGitStash(e events.Event, colour bool) string {
+	action := str(e.Payload, "action")
+	g := glyph("≡", "~", colour)
+	return fmt.Sprintf("  %s  Stash %s", g, Colour(action, Yellow, colour))
+}
+
 func extractStringSlice(v any) []string {
 	switch s := v.(type) {
 	case []string:
