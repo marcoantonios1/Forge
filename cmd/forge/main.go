@@ -33,9 +33,11 @@ var (
 	printFlag        = flag.Bool("print", false, "run a task non-interactively and exit")
 	outputFlag       = flag.String("output", "text", "output format in --print mode: text or json")
 	yesFlag          = flag.Bool("yes", false, "approve all patches without prompting")
-	allowedToolsFlag = flag.String("allowed-tools", "", `comma-separated tool categories to pre-approve.
+	allowedToolsFlag  = flag.String("allowed-tools", "", `comma-separated tool categories to pre-approve.
 	Categories: read, git_read, patch. Use "all" to pre-approve everything.
 	Example: --allowed-tools=read,git_read`)
+	allowMainCommit = flag.Bool("allow-main-commit", false,
+		"allow committing directly to main or master (unsafe)")
 )
 
 type headlessResult struct {
@@ -115,6 +117,13 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 	// 8. Run the agent.
 	runErr := ag.Run(ctx, ac)
 
+	// Post-task git workflow (headless always auto-commits).
+	if runErr == nil && ac.Patches.Len() > 0 {
+		if err := runGitWorkflow(ctx, ac, registry, emitter, true); err != nil {
+			fmt.Fprintf(os.Stderr, "git workflow: %v\n", err)
+		}
+	}
+
 	// Ctrl+C: context.Canceled → exit 130 (standard shell convention).
 	if runErr != nil && errors.Is(runErr, context.Canceled) {
 		writeResult(outputFmt, headlessResult{Status: "failure", Summary: "cancelled"})
@@ -184,6 +193,235 @@ func dedup(sorted []string) []string {
 		}
 	}
 	return out
+}
+
+// slugify converts a task description into a URL-safe branch-name segment.
+func slugify(s string) string {
+	s = strings.ToLower(s)
+	var sb strings.Builder
+	inDash := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			sb.WriteRune(r)
+			inDash = false
+		} else if !inDash && sb.Len() > 0 {
+			sb.WriteByte('-')
+			inDash = true
+		}
+	}
+	result := strings.TrimRight(sb.String(), "-")
+	if len(result) > 50 {
+		result = strings.TrimRight(result[:50], "-")
+	}
+	return result
+}
+
+// openEditor writes initial to a temp file, opens $EDITOR, and returns the
+// edited content. Returns an error if $EDITOR is unset.
+func openEditor(initial string) (string, error) {
+	editorCmd := os.Getenv("EDITOR")
+	if editorCmd == "" {
+		return "", errors.New("EDITOR not set")
+	}
+	f, err := os.CreateTemp("", "forge-commit-*.txt")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(initial); err != nil {
+		f.Close()
+		return "", err
+	}
+	f.Close()
+	cmd := exec.Command(editorCmd, f.Name())
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(f.Name())
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// runGitWorkflow creates a branch (when on main/master), commits, and pushes
+// applied patches. In interactive mode the user is shown a proposal first.
+//
+// Calls DispatchDirect — bypasses the permission gate since the user has already
+// been asked to confirm via the branch/commit prompt below.
+func runGitWorkflow(
+	ctx      context.Context,
+	ac       *agent.AgentContext,
+	registry *agent.Registry,
+	emitter  events.Emitter,
+	auto     bool,
+) error {
+	// 1. Derive branch name.
+	baseBranch := "forge/" + slugify(ac.Task.RawInput)
+
+	// 2. Determine current branch.
+	statusRaw, err := registry.DispatchDirect(ctx, tools.ToolCall{
+		Name: "git_status", Args: map[string]any{"root": ac.Root},
+	})
+	if err != nil {
+		return fmt.Errorf("git_status: %w", err)
+	}
+	status, ok := statusRaw.(*tools.GitStatusResult)
+	if !ok {
+		return fmt.Errorf("unexpected git_status result type")
+	}
+	currentBranch := status.Branch
+	needNewBranch := (currentBranch == "main" || currentBranch == "master") && !*allowMainCommit
+	branchName := currentBranch
+	if needNewBranch {
+		branchName = baseBranch
+	}
+
+	// 3. Build commit message from agent summary or task input.
+	commitMsg := ac.LastSummary
+	if commitMsg == "" {
+		raw := ac.Task.RawInput
+		if len(raw) > 72 {
+			raw = raw[:72]
+		}
+		commitMsg = "forge: " + raw
+	}
+	// Append patched file list to body.
+	var patchedFiles []string
+	for _, rec := range ac.Patches.AllRecords() {
+		if !rec.Reverted {
+			for p := range rec.Originals {
+				patchedFiles = append(patchedFiles, p)
+			}
+		}
+	}
+	sort.Strings(patchedFiles)
+	patchedFiles = dedup(patchedFiles)
+	if len(patchedFiles) > 0 {
+		commitMsg += "\n\nFiles:\n"
+		for _, p := range patchedFiles {
+			commitMsg += "  " + p + "\n"
+		}
+		commitMsg = strings.TrimRight(commitMsg, "\n")
+	}
+
+	// 4. Interactive: show proposal and prompt.
+	if !auto {
+		fmt.Printf("  Branch:  %s\n", branchName)
+		fmt.Printf("  Commit:  %s\n", strings.SplitN(commitMsg, "\n", 2)[0])
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			fmt.Print("Create branch and commit? [y]es / [e]dit / [n]o  ")
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return nil
+			}
+			switch strings.ToLower(strings.TrimSpace(line)) {
+			case "y", "yes":
+				// fall through to commit
+			case "e":
+				initial := fmt.Sprintf("branch: %s\nmessage: %s\n", branchName, strings.SplitN(commitMsg, "\n", 2)[0])
+				edited, err := openEditor(initial)
+				if err != nil {
+					// $EDITOR unset or failed — fall back to inline prompts.
+					fmt.Print("Branch name: ")
+					bl, _ := reader.ReadString('\n')
+					if v := strings.TrimSpace(bl); v != "" {
+						branchName = v
+					}
+					fmt.Print("Commit message: ")
+					ml, _ := reader.ReadString('\n')
+					if v := strings.TrimSpace(ml); v != "" {
+						commitMsg = v
+					}
+				} else {
+					for _, l := range strings.Split(edited, "\n") {
+						if strings.HasPrefix(l, "branch:") {
+							if v := strings.TrimSpace(strings.TrimPrefix(l, "branch:")); v != "" {
+								branchName = v
+							}
+						} else if strings.HasPrefix(l, "message:") {
+							if v := strings.TrimSpace(strings.TrimPrefix(l, "message:")); v != "" {
+								commitMsg = v
+							}
+						}
+					}
+				}
+			case "n", "no", "":
+				fmt.Println("Skipped.")
+				return nil
+			default:
+				continue
+			}
+			break
+		}
+	}
+
+	// 5. Create branch if needed (retry up to 5 times on collision).
+	if needNewBranch {
+		created := false
+		for i := 0; i < 5; i++ {
+			name := baseBranch
+			if i > 0 {
+				name = fmt.Sprintf("%s-%d", baseBranch, i+1)
+			}
+			_, err := registry.DispatchDirect(ctx, tools.ToolCall{
+				Name: "git_branch",
+				Args: map[string]any{"root": ac.Root, "name": name, "checkout": true},
+			})
+			if err == nil {
+				branchName = name
+				emitter.Emit(events.GitBranchEvent(ac.SessionID, branchName, true))
+				created = true
+				break
+			}
+		}
+		if !created {
+			return fmt.Errorf("could not create branch after 5 attempts")
+		}
+	}
+
+	// 6. Commit.
+	commitRaw, err := registry.DispatchDirect(ctx, tools.ToolCall{
+		Name: "git_commit",
+		Args: map[string]any{"root": ac.Root, "message": commitMsg, "stage_all": true},
+	})
+	if err != nil {
+		return fmt.Errorf("git_commit: %w", err)
+	}
+	cr, ok := commitRaw.(*tools.GitCommitResult)
+	if !ok {
+		return fmt.Errorf("unexpected git_commit result type")
+	}
+	emitter.Emit(events.GitCommitEvent(ac.SessionID, cr.Hash, cr.Message, cr.Files))
+	ac.AppliedCommit = cr.Hash
+	ac.AppliedBranch = branchName
+
+	// 7. Push — prompt in interactive mode.
+	if !auto {
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Printf("Push to origin/%s? [y]es / [n]o  ", branchName)
+		line, err := reader.ReadString('\n')
+		if err != nil || strings.ToLower(strings.TrimSpace(line)) != "y" {
+			return nil
+		}
+	}
+	pushRaw, err := registry.DispatchDirect(ctx, tools.ToolCall{
+		Name: "git_push",
+		Args: map[string]any{"root": ac.Root, "remote": "origin", "branch": branchName, "set_upstream": true},
+	})
+	if err != nil {
+		return fmt.Errorf("git_push: %w", err)
+	}
+	pr, ok := pushRaw.(*tools.GitPushResult)
+	if !ok {
+		return fmt.Errorf("unexpected git_push result type")
+	}
+	emitter.Emit(events.GitPushEvent(ac.SessionID, pr.Remote, pr.Branch))
+	return nil
 }
 
 // handleUndo reverts the most recently applied patch set.
@@ -339,6 +577,13 @@ func main() {
 
 		if err := a.Run(ctx, ac); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %s\n", err)
+			continue
+		}
+		if ac.Patches.Len() > 0 {
+			_, auto := confirmer.(confirm.AutoConfirmer)
+			if err := runGitWorkflow(ctx, ac, registry, renderer, auto); err != nil {
+				fmt.Fprintf(os.Stderr, "git workflow: %v\n", err)
+			}
 		}
 	}
 }
