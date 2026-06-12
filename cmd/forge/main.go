@@ -1,8 +1,5 @@
-// main.go is the entry point for the Forge autonomous software engineering agent.
-// This file handles the CLI interface and starts the agent execution loop.
 package main
 
-import (
 import (
 	"bufio"
 	"context"
