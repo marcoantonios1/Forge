@@ -13,6 +13,7 @@ type Hunk struct {
 type Patch struct {
 	Path  string
 	Hunks []Hunk
+	IsNew bool // true when the patch creates a file that does not yet exist
 }
 
 type PatchSet struct {

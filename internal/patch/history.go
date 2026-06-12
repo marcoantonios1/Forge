@@ -68,12 +68,19 @@ func (h *PatchHistory) Undo(root string, emitter events.Emitter) error {
 
 	for path, data := range target.Originals {
 		abs := filepath.Join(absRoot, path)
-		perm := os.FileMode(0644)
-		if info, err := os.Stat(abs); err == nil {
-			perm = info.Mode()
-		}
-		if err := os.WriteFile(abs, data, perm); err != nil {
-			return err
+		if data == nil {
+			// File was created by this patch — delete it on undo.
+			if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		} else {
+			perm := os.FileMode(0644)
+			if info, err := os.Stat(abs); err == nil {
+				perm = info.Mode()
+			}
+			if err := os.WriteFile(abs, data, perm); err != nil {
+				return err
+			}
 		}
 		emitter.Emit(events.Event{
 			Type:      events.EventFilePatchReverted,
