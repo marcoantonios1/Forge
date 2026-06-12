@@ -223,6 +223,10 @@ func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response stri
 	// TODO: parallel tool execution — read/apply multiple files concurrently (post-MVP).
 	originals := make(map[string][]byte)
 	for _, p := range ps.Patches {
+		if p.IsNew {
+			originals[p.Path] = nil
+			continue
+		}
 		absPath := ac.Root + "/" + p.Path
 		data, readErr := os.ReadFile(absPath)
 		if readErr == nil {

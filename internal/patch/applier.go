@@ -48,23 +48,40 @@ func Apply(root string, ps *PatchSet, emitter events.Emitter) (ApplyResult, erro
 	for _, p := range ps.Patches {
 		abs := filepath.Join(absRoot, p.Path)
 
-		data, err := os.ReadFile(abs)
-		if err != nil {
-			return rollback(root, originals, result, emitter, ps.SessionID,
-				fmt.Errorf("read %s: %w", p.Path, err))
+		isNew := false
+		var fileLines []string
+		if p.IsNew {
+			originals[p.Path] = nil
+			isNew = true
+			fileLines = []string{}
+		} else {
+			data, err := os.ReadFile(abs)
+			if err != nil {
+				return rollback(root, originals, result, emitter, ps.SessionID,
+					fmt.Errorf("read %s: %w", p.Path, err))
+			}
+			originals[p.Path] = data
+			fileLines = strings.Split(string(data), "\n")
 		}
-		originals[p.Path] = data
 
-		patched, err := applyHunks(strings.Split(string(data), "\n"), p.Hunks)
+		patched, err := applyHunks(fileLines, p.Hunks)
 		if err != nil {
 			return rollback(root, originals, result, emitter, ps.SessionID,
 				fmt.Errorf("apply hunks to %s: %w", p.Path, err))
 		}
 
-		info, _ := os.Stat(abs)
+		if isNew {
+			if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
+				return rollback(root, originals, result, emitter, ps.SessionID,
+					fmt.Errorf("mkdir %s: %w", filepath.Dir(abs), err))
+			}
+		}
+
 		perm := os.FileMode(0644)
-		if info != nil {
-			perm = info.Mode()
+		if !isNew {
+			if info, err := os.Stat(abs); err == nil {
+				perm = info.Mode()
+			}
 		}
 
 		if err := os.WriteFile(abs, []byte(strings.Join(patched, "\n")), perm); err != nil {
@@ -127,7 +144,12 @@ func rollback(root string, originals map[string][]byte, result ApplyResult, emit
 
 	for path, data := range originals {
 		abs := filepath.Join(absRoot, path)
-		_ = os.WriteFile(abs, data, 0644)
+		if data == nil {
+			_ = os.Remove(abs)
+			removeEmptyDirs(filepath.Dir(abs), absRoot)
+		} else {
+			_ = os.WriteFile(abs, data, 0644)
+		}
 		result.RolledBack = append(result.RolledBack, path)
 		emitter.Emit(events.Event{
 			Type:      events.EventFilePatchFailed,
@@ -138,4 +160,18 @@ func rollback(root string, originals map[string][]byte, result ApplyResult, emit
 	}
 
 	return result, cause
+}
+
+// removeEmptyDirs walks up from dir toward root, deleting empty directories.
+func removeEmptyDirs(dir, root string) {
+	for dir != root && strings.HasPrefix(dir, root) {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			break
+		}
+		if err := os.Remove(dir); err != nil {
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
 }

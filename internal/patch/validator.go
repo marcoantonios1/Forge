@@ -45,12 +45,28 @@ func Validate(root string, ps *PatchSet) ValidationResult {
 			continue
 		}
 
-		// 2. File must exist.
-		// TODO: new-file creation (patch against /dev/null) is out of scope.
+		// 2. File must exist (or be a new-file patch).
 		info, err := os.Stat(abs)
 		if err != nil {
 			if os.IsNotExist(err) {
-				add(p.Path, "file not found")
+				if p.IsNew {
+					for hi, h := range p.Hunks {
+						if h.OldStart != 0 || h.OldLines != 0 {
+							add(p.Path, fmt.Sprintf(
+								"hunk %d: new file patch must have OldStart=0 OldLines=0, got %d/%d",
+								hi+1, h.OldStart, h.OldLines))
+						}
+						for _, l := range h.Lines {
+							if len(l) > 0 && l[0] == '-' {
+								add(p.Path, fmt.Sprintf(
+									"hunk %d: new file patch must not contain '-' lines", hi+1))
+								break
+							}
+						}
+					}
+					continue
+				}
+				add(p.Path, "file not found: check the path is correct relative to the repo root")
 			} else {
 				add(p.Path, "stat error: "+err.Error())
 			}

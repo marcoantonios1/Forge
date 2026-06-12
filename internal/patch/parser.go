@@ -58,10 +58,14 @@ func ParsePatchSet(sessionID, taskID, diffText string) (*PatchSet, error) {
 			continue
 		}
 
-		// --- line: old file (ignore in git format; used for path in simple format).
+		// --- line: old file. Detect /dev/null to mark new-file patches.
 		if strings.HasPrefix(line, "--- ") {
 			if cur == nil {
 				cur = &Patch{}
+			}
+			src := strings.TrimSpace(strings.TrimPrefix(line, "--- "))
+			if src == "/dev/null" {
+				cur.IsNew = true
 			}
 			continue
 		}
