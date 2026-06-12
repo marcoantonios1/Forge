@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"io"
 	"os/exec"
 	"os/signal"
 	"sort"
@@ -215,6 +216,21 @@ func slugify(s string) string {
 		result = strings.TrimRight(result[:50], "-")
 	}
 	return result
+}
+
+func confirmPolicy(
+	policy compiler.ExecutionPolicy,
+	yesOverride bool,
+	in io.Reader,
+	out io.Writer,
+	colour bool,
+	emitter events.Emitter,
+	sessionID string,
+) agent.PatchConfirmer {
+	if yesOverride || policy == compiler.PolicyAutonomous {
+		return confirm.AutoConfirmer{}
+	}
+	return confirm.NewSafeConfirmer(in, out, colour, emitter, sessionID)
 }
 
 // openEditor writes initial to a temp file, opens $EDITOR, and returns the
@@ -497,20 +513,7 @@ func main() {
 	// TODO: persist undo history across sessions (currently in-memory only).
 	sessionHistory := patch.NewPatchHistory()
 
-	// 8. Confirmer
-	var confirmer agent.PatchConfirmer
-	if *yesFlag {
-		confirmer = confirm.AutoConfirmer{}
-	} else {
-		confirmer = confirm.NewSafeConfirmer(
-			os.Stdin, os.Stderr,
-			ui.IsTTY(os.Stdout),
-			renderer,
-			id,
-		)
-	}
-
-	// 9. Signal handling
+	// 8. Signal handling
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT)
 	go func() {
@@ -554,6 +557,14 @@ func main() {
 
 		fmt.Fprintf(os.Stderr, "compiled: %s/%s [%s]\n",
 			task.Category, task.Scope, task.ExecutionPolicy)
+
+		confirmer := confirmPolicy(
+			task.ExecutionPolicy, *yesFlag,
+			os.Stdin, os.Stderr,
+			ui.IsTTY(os.Stdout),
+			renderer, id,
+		)
+		fmt.Fprintf(os.Stderr, "mode: %s\n", task.ExecutionPolicy)
 
 		// Run agent
 		agentCfg := agent.Config{
