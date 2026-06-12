@@ -159,7 +159,8 @@ func formatGitBranch(e events.Event, colour bool) string {
 
 func formatGitCommit(e events.Event, colour bool) string {
 	hash := str(e.Payload, "hash")
-	msg := str(e.Payload, "message")
+	// Only show the subject line — the body may contain a "Files:" list.
+	msg := strings.SplitN(str(e.Payload, "message"), "\n", 2)[0]
 	g := glyph("✦", "*", colour)
 	return fmt.Sprintf("  %s  Committed  %s %s",
 		g, DimText("["+hash+"]", colour), Colour(msg, Bold, colour))
