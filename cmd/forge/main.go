@@ -113,7 +113,7 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 		AutoApply: true,
 		Debug:     debug,
 	}
-	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer)
+	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer, nil, nil, nil)
 
 	// 8. Run the agent.
 	runErr := ag.Run(ctx, ac)
@@ -573,7 +573,7 @@ func main() {
 			interactive,
 		)
 		registry := agent.NewRegistry(cwd, renderer, id, gate)
-		a := agent.New(agentCfg, client, registry, renderer, confirmer)
+		a := agent.New(agentCfg, client, registry, renderer, confirmer, comp, os.Stdin, os.Stderr)
 		ac := agent.NewAgentContext(id, task, cwd, projectCfg, sessionHistory)
 
 		if err := a.Run(ctx, ac); err != nil {

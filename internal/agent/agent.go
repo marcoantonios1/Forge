@@ -1,13 +1,17 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/marcoantonios1/Forge/internal/compiler"
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
 	"github.com/marcoantonios1/Forge/internal/patch"
@@ -30,19 +34,39 @@ type PatchConfirmer interface {
 }
 
 type Agent struct {
-	cfg      Config
-	client   *costguard.Client
-	registry *Registry
-	emitter  events.Emitter
-	patcher  PatchConfirmer
+	cfg        Config
+	client     *costguard.Client
+	registry   *Registry
+	emitter    events.Emitter
+	patcher    PatchConfirmer
+	comp       *compiler.Compiler // nil = clarification disabled (headless)
+	clarifyIn  io.Reader          // nil = clarification disabled
+	clarifyOut io.Writer          // nil = clarification disabled
 }
 
-func New(cfg Config, client *costguard.Client, registry *Registry,
-	emitter events.Emitter, patcher PatchConfirmer) *Agent {
+func New(
+	cfg        Config,
+	client     *costguard.Client,
+	registry   *Registry,
+	emitter    events.Emitter,
+	patcher    PatchConfirmer,
+	comp       *compiler.Compiler,
+	clarifyIn  io.Reader,
+	clarifyOut io.Writer,
+) *Agent {
 	if cfg.MaxIter <= 0 {
 		cfg.MaxIter = defaultMaxIter
 	}
-	return &Agent{cfg: cfg, client: client, registry: registry, emitter: emitter, patcher: patcher}
+	return &Agent{
+		cfg:        cfg,
+		client:     client,
+		registry:   registry,
+		emitter:    emitter,
+		patcher:    patcher,
+		comp:       comp,
+		clarifyIn:  clarifyIn,
+		clarifyOut: clarifyOut,
+	}
 }
 
 func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
@@ -54,6 +78,13 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		SessionID: ac.SessionID,
 		Payload:   map[string]any{"session_id": ac.SessionID, "task": string(taskJSON), "root": ac.Root},
 	})
+
+	// Step 0.5 — supervised clarification (before any tool calls).
+	if a.comp != nil && a.clarifyIn != nil {
+		if refined := a.clarify(ctx, ac); refined != ac.Task {
+			ac.Task = refined
+		}
+	}
 
 	// Step 1a — stash dirty working tree and pull latest (best-effort).
 	a.prepareRepo(ctx, ac)
@@ -243,6 +274,89 @@ func (a *Agent) gatherGitContext(ctx context.Context, ac *AgentContext) {
 	if status != "" || diff != "" || log != "" {
 		ac.History = append(ac.History, GitContextMessage(status, diff, log))
 	}
+}
+
+// clarify makes a single pre-loop LLM call to check whether the agent wants to
+// ask a clarifying question for a supervised task. If it does, the question is
+// shown to the user, their answer is re-compiled, and the refined task is returned.
+//
+// Returns ac.Task unchanged when:
+//   - policy is not supervised, or ClarificationAsked is already true
+//   - the LLM does not emit FORGE_CLARIFY
+//   - the user presses Enter with no input
+//   - re-compilation fails or is rejected
+//
+// TODO: extend to multi-turn clarification (up to N rounds) when needed.
+// TODO: surface the clarification answer in the git commit message.
+func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
+	ac.ClarificationAsked = true // always set — prevents any second round
+
+	if ac.Task.ExecutionPolicy != compiler.PolicySupervised {
+		return ac.Task
+	}
+
+	// Guard: don't proceed if context is already cancelled.
+	if ctx.Err() != nil {
+		return ac.Task
+	}
+
+	// One-shot LLM call to check for FORGE_CLARIFY.
+	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
+		Model: a.cfg.Model,
+		Messages: []costguard.Message{
+			SystemMessage(ac.ProjectConfig),
+			TaskMessage(ac.Task),
+			{Role: "user", Content: "Should you ask a clarifying question before starting? " +
+				"If yes, emit FORGE_CLARIFY: <one specific question>. " +
+				"If the task is clear enough to proceed, emit FORGE_DONE: ready."},
+		},
+	})
+	if err != nil || len(resp.Choices) == 0 {
+		return ac.Task
+	}
+
+	response := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if !strings.HasPrefix(response, "FORGE_CLARIFY:") {
+		return ac.Task
+	}
+
+	question := strings.TrimSpace(strings.TrimPrefix(response, "FORGE_CLARIFY:"))
+	if question == "" {
+		return ac.Task
+	}
+
+	a.emitter.Emit(events.ClarificationAskedEvent(ac.SessionID, question, ac.Task.RawInput))
+	fmt.Fprint(a.clarifyOut, "  clarify> ")
+
+	// Guard: check cancellation before blocking on user input.
+	if ctx.Err() != nil {
+		return ac.Task
+	}
+
+	line, err := bufio.NewReader(a.clarifyIn).ReadString('\n')
+	answer := strings.TrimSpace(line)
+	if err != nil || answer == "" {
+		a.emitter.Emit(events.ClarificationAnsweredEvent(ac.SessionID, "", false))
+		return ac.Task
+	}
+
+	refined, err := a.comp.Compile(ctx, answer)
+	var reject *compiler.RejectionError
+	if errors.As(err, &reject) || err != nil {
+		a.emitter.Emit(events.ClarificationAnsweredEvent(ac.SessionID, answer, false))
+		return ac.Task
+	}
+
+	// Carry over constraints/deliverables the refined task may have omitted.
+	if len(refined.Constraints) == 0 {
+		refined.Constraints = ac.Task.Constraints
+	}
+	if len(refined.Deliverables) == 0 {
+		refined.Deliverables = ac.Task.Deliverables
+	}
+
+	a.emitter.Emit(events.ClarificationAnsweredEvent(ac.SessionID, answer, true))
+	return refined
 }
 
 // prepareRepo stashes a dirty working tree and pulls latest before the agent runs.

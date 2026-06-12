@@ -151,6 +151,21 @@ func formatTaskFailed(e events.Event, colour bool) string {
 	return fmt.Sprintf("  %s  %s %s", g, label, Colour(reason, Bold, colour))
 }
 
+func formatClarificationAsked(e events.Event, colour bool) string {
+	question := str(e.Payload, "question")
+	prefix := Colour("?", Yellow, colour)
+	return fmt.Sprintf("\n  %s  Clarification needed: %s", prefix, Colour(question, Bold, colour))
+}
+
+func formatClarificationAnswered(e events.Event, colour bool) string {
+	refined, _ := e.Payload["refined"].(bool)
+	label := "original task"
+	if refined {
+		label = str(e.Payload, "answer")
+	}
+	return fmt.Sprintf("  %s  Proceeding with %s", DimText("↳", colour), label)
+}
+
 func formatGitBranch(e events.Event, colour bool) string {
 	branch := str(e.Payload, "branch")
 	g := glyph("⎇", ">", colour)

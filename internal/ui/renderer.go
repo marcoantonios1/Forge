@@ -73,6 +73,10 @@ func (r *Renderer) Emit(e events.Event) {
 		line = formatFilePatchFailed(e, r.colour)
 	case events.EventTaskComplete:
 		line = BuildSummary(e, r.colour)
+	case events.EventClarificationAsked:
+		line = formatClarificationAsked(e, r.colour)
+	case events.EventClarificationAnswered:
+		line = formatClarificationAnswered(e, r.colour)
 	case events.EventGitBranch:
 		line = formatGitBranch(e, r.colour)
 	case events.EventGitCommit:
