@@ -326,7 +326,7 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 	}
 
 	a.emitter.Emit(events.ClarificationAskedEvent(ac.SessionID, question, ac.Task.RawInput))
-	fmt.Fprintf(a.clarifyOut, "\n  Clarification needed: %s\n  clarify> ", question)
+	fmt.Fprint(a.clarifyOut, "  clarify> ")
 
 	// Guard: check cancellation before blocking on user input.
 	if ctx.Err() != nil {
