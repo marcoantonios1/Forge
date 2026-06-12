@@ -83,8 +83,7 @@ func (c *Compiler) Compile(ctx context.Context, rawInput string) (*Task, error) 
 		return nil, err
 	}
 
-	// TODO: supervised clarification loop — if task.ExecutionPolicy == PolicySupervised,
-	// ask the user one follow-up question to resolve ambiguity before returning.
+	// Clarification is handled in agent.clarify() — see internal/agent/agent.go.
 
 	if c.debug {
 		pretty, _ := json.MarshalIndent(&task, "", "  ")
