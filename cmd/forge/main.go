@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sort"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/patch"
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 	"github.com/marcoantonios1/Forge/internal/session"
+	"github.com/marcoantonios1/Forge/internal/tools"
 	"github.com/marcoantonios1/Forge/internal/ui"
 )
 

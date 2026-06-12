@@ -55,7 +55,10 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		Payload:   map[string]any{"session_id": ac.SessionID, "task": string(taskJSON), "root": ac.Root},
 	})
 
-	// Step 1 — gather git context (best-effort).
+	// Step 1a — stash dirty working tree and pull latest (best-effort).
+	a.prepareRepo(ctx, ac)
+
+	// Step 1b — gather git context (best-effort).
 	a.gatherGitContext(ctx, ac)
 
 	// Seed history with system + task messages.
@@ -240,6 +243,32 @@ func (a *Agent) gatherGitContext(ctx context.Context, ac *AgentContext) {
 	if status != "" || diff != "" || log != "" {
 		ac.History = append(ac.History, GitContextMessage(status, diff, log))
 	}
+}
+
+// prepareRepo stashes a dirty working tree and pulls latest before the agent runs.
+// Both operations are best-effort — errors are silently ignored so the agent
+// can still proceed when git is unavailable or there is no upstream.
+func (a *Agent) prepareRepo(ctx context.Context, ac *AgentContext) {
+	statusResult, err := a.registry.Dispatch(ctx, ToolCall{
+		Name: "git_status", Args: map[string]any{"root": ac.Root},
+	})
+	if err != nil {
+		// Not a git repo or git unavailable — skip stash, still attempt pull.
+		a.registry.Dispatch(ctx, ToolCall{ //nolint:errcheck
+			Name: "git_pull", Args: map[string]any{"root": ac.Root, "remote": "origin"},
+		})
+		return
+	}
+	if status, ok := statusResult.(*tools.GitStatusResult); ok && !status.IsClean {
+		a.registry.Dispatch(ctx, ToolCall{ //nolint:errcheck
+			Name:  "git_stash",
+			Args:  map[string]any{"root": ac.Root, "action": "push", "message": "forge: auto-stash"},
+		})
+		a.emitter.Emit(events.GitStashEvent(ac.SessionID, "push"))
+	}
+	a.registry.Dispatch(ctx, ToolCall{ //nolint:errcheck
+		Name: "git_pull", Args: map[string]any{"root": ac.Root, "remote": "origin"},
+	})
 }
 
 func userMsg(content string) costguard.Message {

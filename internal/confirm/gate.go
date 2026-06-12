@@ -26,9 +26,12 @@ var toolCategory = map[string]string{
 	"git_diff":    "git_read",
 	"git_log":     "git_read",
 	// patch is handled by SafeConfirmer; not gated here.
-	// git_write tools are post-MVP — defined for completeness:
-	"git_commit": "git_write",
-	"git_branch": "git_write",
+	"git_branch":   "git_write",
+	"git_checkout": "git_write",
+	"git_stash":    "git_write",
+	"git_pull":     "git_write",
+	"git_commit":   "git_write",
+	"git_push":     "git_write",
 }
 
 // allCategories is the complete set of known categories used by "all" expansion.
