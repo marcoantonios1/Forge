@@ -14,7 +14,9 @@ import (
 	"os/signal"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/marcoantonios1/Forge/internal/agent"
 	"github.com/marcoantonios1/Forge/internal/compiler"
@@ -215,6 +217,72 @@ func slugify(s string) string {
 		result = strings.TrimRight(result[:50], "-")
 	}
 	return result
+}
+
+// runTask compiles and runs a single REPL task: compile, build the agent,
+// run it under ctx, and run the post-task git workflow. ctx is cancelled by
+// the caller's signal handler on Ctrl+C — it does not read taskCancel/taskMu.
+func runTask(
+	ctx context.Context,
+	line string,
+	cwd string,
+	cfg *config.Config,
+	client *costguard.Client,
+	comp *compiler.Compiler,
+	renderer *ui.Renderer,
+	sessionHistory *patch.PatchHistory,
+	projectCfg *projectconfig.ProjectConfig,
+	sessionID string,
+	yesOverride bool,
+	allowedTools string,
+	debug bool,
+) error {
+	task, err := comp.Compile(ctx, line)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "compiled: %s/%s [%s]\n",
+		task.Category, task.Scope, task.ExecutionPolicy)
+
+	confirmer := confirmPolicy(
+		task.ExecutionPolicy, yesOverride,
+		os.Stdin, os.Stderr,
+		ui.IsTTY(os.Stdout),
+		renderer, sessionID,
+	)
+	fmt.Fprintf(os.Stderr, "mode: %s\n", task.ExecutionPolicy)
+
+	agentCfg := agent.Config{
+		Model:   cfg.AgentModel,
+		MaxIter: 30,
+		Debug:   cfg.Debug,
+	}
+	preApproved := confirm.ParseAllowedTools(allowedTools)
+	interactive := task.ExecutionPolicy != compiler.PolicyAutonomous && !yesOverride
+	gate := confirm.NewPermissionGate(
+		os.Stdin, os.Stderr,
+		ui.IsTTY(os.Stdout),
+		debug,
+		renderer,
+		sessionID,
+		preApproved,
+		interactive,
+	)
+	registry := agent.NewRegistry(cwd, renderer, sessionID, gate)
+	a := agent.New(agentCfg, client, registry, renderer, confirmer, comp, os.Stdin, os.Stderr)
+	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory)
+
+	if err := a.Run(ctx, ac); err != nil {
+		return err
+	}
+	if ac.Patches.Len() > 0 {
+		_, auto := confirmer.(confirm.AutoConfirmer)
+		if err := runGitWorkflow(ctx, ac, registry, renderer, auto); err != nil {
+			fmt.Fprintf(os.Stderr, "git workflow: %v\n", err)
+		}
+	}
+	return nil
 }
 
 func confirmPolicy(
@@ -512,13 +580,35 @@ func main() {
 	// TODO: persist undo history across sessions (currently in-memory only).
 	sessionHistory := patch.NewPatchHistory()
 
-	// 8. Signal handling
+	// 8. Signal handling. Ctrl+C cancels a running task without exiting; with
+	// no task running it exits. A second Ctrl+C within 1 second always exits.
+	var (
+		taskCancel context.CancelFunc
+		taskMu     sync.Mutex
+	)
+
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT)
 	go func() {
-		<-sigs
-		fmt.Println("\nbye.")
-		os.Exit(0)
+		var lastSig time.Time
+		for range sigs {
+			if !lastSig.IsZero() && time.Since(lastSig) < time.Second {
+				fmt.Println("\nbye.")
+				os.Exit(0)
+			}
+			lastSig = time.Now()
+
+			taskMu.Lock()
+			cancel := taskCancel
+			taskMu.Unlock()
+
+			if cancel != nil {
+				cancel()
+			} else {
+				fmt.Println("\nbye.")
+				os.Exit(0)
+			}
+		}
 	}()
 
 	// REPL
@@ -540,60 +630,31 @@ func main() {
 			continue
 		}
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		taskMu.Lock()
+		taskCancel = cancel
+		taskMu.Unlock()
 
-		// Compile
-		task, err := comp.Compile(ctx, line)
-		if err != nil {
-			var re *compiler.RejectionError
-			if errors.As(err, &re) {
-				fmt.Fprintf(os.Stderr, "rejected: %s\n", re.Reason)
+		runErr := runTask(ctx, line, cwd, cfg, client, comp, renderer,
+			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag)
+
+		cancel()
+		taskMu.Lock()
+		taskCancel = nil
+		taskMu.Unlock()
+
+		if runErr != nil {
+			if errors.Is(runErr, context.Canceled) {
+				// TODO: if the task had applied patches before cancellation,
+				// hint "run `undo` to revert applied patches" here.
+				fmt.Println("task cancelled")
 			} else {
-				fmt.Fprintf(os.Stderr, "error: %s\n", err)
-			}
-			continue
-		}
-
-		fmt.Fprintf(os.Stderr, "compiled: %s/%s [%s]\n",
-			task.Category, task.Scope, task.ExecutionPolicy)
-
-		confirmer := confirmPolicy(
-			task.ExecutionPolicy, *yesFlag,
-			os.Stdin, os.Stderr,
-			ui.IsTTY(os.Stdout),
-			renderer, id,
-		)
-		fmt.Fprintf(os.Stderr, "mode: %s\n", task.ExecutionPolicy)
-
-		// Run agent
-		agentCfg := agent.Config{
-			Model:   cfg.AgentModel,
-			MaxIter: 30,
-			Debug:   cfg.Debug,
-		}
-		preApproved := confirm.ParseAllowedTools(*allowedToolsFlag)
-		interactive := task.ExecutionPolicy != compiler.PolicyAutonomous && !*yesFlag
-		gate := confirm.NewPermissionGate(
-			os.Stdin, os.Stderr,
-			ui.IsTTY(os.Stdout),
-			*debugFlag,
-			renderer,
-			id,
-			preApproved,
-			interactive,
-		)
-		registry := agent.NewRegistry(cwd, renderer, id, gate)
-		a := agent.New(agentCfg, client, registry, renderer, confirmer, comp, os.Stdin, os.Stderr)
-		ac := agent.NewAgentContext(id, task, cwd, projectCfg, sessionHistory)
-
-		if err := a.Run(ctx, ac); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s\n", err)
-			continue
-		}
-		if ac.Patches.Len() > 0 {
-			_, auto := confirmer.(confirm.AutoConfirmer)
-			if err := runGitWorkflow(ctx, ac, registry, renderer, auto); err != nil {
-				fmt.Fprintf(os.Stderr, "git workflow: %v\n", err)
+				var re *compiler.RejectionError
+				if errors.As(runErr, &re) {
+					fmt.Fprintf(os.Stderr, "rejected: %s\n", re.Reason)
+				} else {
+					fmt.Fprintf(os.Stderr, "error: %s\n", runErr)
+				}
 			}
 		}
 	}
