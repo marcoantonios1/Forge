@@ -20,20 +20,20 @@ type Detection struct {
 }
 
 var extToLang = map[string]string{
-	".go":  "Go",
-	".ts":  "TypeScript",
-	".tsx": "TypeScript",
-	".js":  "JavaScript",
-	".jsx": "JavaScript",
-	".py":  "Python",
-	".rs":  "Rust",
+	".go":   "Go",
+	".ts":   "TypeScript",
+	".tsx":  "TypeScript",
+	".js":   "JavaScript",
+	".jsx":  "JavaScript",
+	".py":   "Python",
+	".rs":   "Rust",
 	".java": "Java",
-	".rb":  "Ruby",
-	".cs":  "C#",
-	".cpp": "C++",
-	".cc":  "C++",
-	".cxx": "C++",
-	".c":   "C",
+	".rb":   "Ruby",
+	".cs":   "C#",
+	".cpp":  "C++",
+	".cc":   "C++",
+	".cxx":  "C++",
+	".c":    "C",
 }
 
 func exists(path string) bool {
