@@ -113,7 +113,7 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 	confirmer := confirm.AutoConfirmer{} // always — no prompts in headless mode
 	agentCfg := agent.Config{
 		Model:     appCfg.AgentModel,
-		MaxIter:   30,
+		MaxIter:   100,
 		AutoApply: true,
 		Debug:     debug,
 	}
@@ -257,7 +257,7 @@ func runTask(
 
 	agentCfg := agent.Config{
 		Model:   cfg.AgentModel,
-		MaxIter: 30,
+		MaxIter: 100,
 		Debug:   cfg.Debug,
 	}
 	preApproved := confirm.ParseAllowedTools(allowedTools)
