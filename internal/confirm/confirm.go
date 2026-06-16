@@ -2,6 +2,7 @@ package confirm
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,12 +18,12 @@ var ErrConfirmCancelled = errors.New("confirm: cancelled by user")
 // AutoConfirmer always approves. Used for autonomous execution_policy or --yes flag.
 type AutoConfirmer struct{}
 
-func (AutoConfirmer) Confirm(_ *patch.PatchSet) (bool, error) { return true, nil }
+func (AutoConfirmer) Confirm(_ context.Context, _ *patch.PatchSet) (bool, error) { return true, nil }
 
 // NullConfirmer always declines. Used in tests and dry-run mode.
 type NullConfirmer struct{}
 
-func (NullConfirmer) Confirm(_ *patch.PatchSet) (bool, error) { return false, nil }
+func (NullConfirmer) Confirm(_ context.Context, _ *patch.PatchSet) (bool, error) { return false, nil }
 
 // SafeConfirmer is the interactive confirmer for safe and supervised modes.
 type SafeConfirmer struct {
@@ -50,7 +51,7 @@ func NewSafeConfirmer(
 	}
 }
 
-func (c *SafeConfirmer) Confirm(ps *patch.PatchSet) (bool, error) {
+func (c *SafeConfirmer) Confirm(ctx context.Context, ps *patch.PatchSet) (bool, error) {
 	// TODO: per-tool-category permission grants (--allowed-tools flag) would hook in here.
 	// TODO: auto-decline timeout after N seconds of no input would hook in here.
 
@@ -66,7 +67,26 @@ func (c *SafeConfirmer) Confirm(ps *patch.PatchSet) (bool, error) {
 	for {
 		fmt.Fprint(c.out, "Apply this patch? [y]es / [n]o / [a]ll session  ")
 
-		line, err := reader.ReadString('\n')
+		// Read in a goroutine so a cancelled ctx (Ctrl+C) interrupts the
+		// prompt instead of blocking forever on stdin.
+		type readResult struct {
+			line string
+			err  error
+		}
+		resultCh := make(chan readResult, 1)
+		go func() {
+			line, err := reader.ReadString('\n')
+			resultCh <- readResult{line, err}
+		}()
+
+		var line string
+		var err error
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case res := <-resultCh:
+			line, err = res.line, res.err
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return false, ErrConfirmCancelled

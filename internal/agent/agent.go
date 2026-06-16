@@ -30,7 +30,7 @@ type Config struct {
 // PatchConfirmer abstracts user confirmation for patches.
 // Autonomous mode: always returns true. Supervised/safe: prompts the user.
 type PatchConfirmer interface {
-	Confirm(ps *patch.PatchSet) (bool, error)
+	Confirm(ctx context.Context, ps *patch.PatchSet) (bool, error)
 }
 
 type Agent struct {
@@ -210,7 +210,7 @@ func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response stri
 		return nil
 	}
 
-	confirmed, err := a.patcher.Confirm(ps)
+	confirmed, err := a.patcher.Confirm(ctx, ps)
 	if err != nil {
 		return fmt.Errorf("agent: patch confirmation error: %w", err)
 	}
@@ -260,7 +260,7 @@ func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response stri
 func (a *Agent) gatherGitContext(ctx context.Context, ac *AgentContext) {
 	runGit := func(name string, args map[string]any) string {
 		args["root"] = ac.Root
-		result, err := a.registry.Dispatch(ctx, ToolCall{Name: name, Args: args})
+		result, err := a.registry.DispatchDirect(ctx, ToolCall{Name: name, Args: args})
 		if err != nil {
 			if a.cfg.Debug {
 				fmt.Printf("[agent] git context warning (%s): %v\n", name, err)
@@ -337,7 +337,27 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 		return ac.Task
 	}
 
-	line, err := bufio.NewReader(a.clarifyIn).ReadString('\n')
+	// Read the answer in a goroutine so a cancelled ctx (Ctrl+C) interrupts
+	// the prompt instead of blocking forever on stdin.
+	type readResult struct {
+		line string
+		err  error
+	}
+	resultCh := make(chan readResult, 1)
+	go func() {
+		line, err := bufio.NewReader(a.clarifyIn).ReadString('\n')
+		resultCh <- readResult{line, err}
+	}()
+
+	var line string
+	select {
+	case <-ctx.Done():
+		a.emitter.Emit(events.ClarificationAnsweredEvent(ac.SessionID, "", false))
+		return ac.Task
+	case res := <-resultCh:
+		line, err = res.line, res.err
+	}
+
 	answer := strings.TrimSpace(line)
 	if err != nil || answer == "" {
 		a.emitter.Emit(events.ClarificationAnsweredEvent(ac.SessionID, "", false))
@@ -367,24 +387,24 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 // Both operations are best-effort — errors are silently ignored so the agent
 // can still proceed when git is unavailable or there is no upstream.
 func (a *Agent) prepareRepo(ctx context.Context, ac *AgentContext) {
-	statusResult, err := a.registry.Dispatch(ctx, ToolCall{
+	statusResult, err := a.registry.DispatchDirect(ctx, ToolCall{
 		Name: "git_status", Args: map[string]any{"root": ac.Root},
 	})
 	if err != nil {
 		// Not a git repo or git unavailable — skip stash, still attempt pull.
-		a.registry.Dispatch(ctx, ToolCall{ //nolint:errcheck
+		a.registry.DispatchDirect(ctx, ToolCall{ //nolint:errcheck
 			Name: "git_pull", Args: map[string]any{"root": ac.Root, "remote": "origin"},
 		})
 		return
 	}
 	if status, ok := statusResult.(*tools.GitStatusResult); ok && !status.IsClean {
-		a.registry.Dispatch(ctx, ToolCall{ //nolint:errcheck
+		a.registry.DispatchDirect(ctx, ToolCall{ //nolint:errcheck
 			Name:  "git_stash",
 			Args:  map[string]any{"root": ac.Root, "action": "push", "message": "forge: auto-stash"},
 		})
 		a.emitter.Emit(events.GitStashEvent(ac.SessionID, "push"))
 	}
-	a.registry.Dispatch(ctx, ToolCall{ //nolint:errcheck
+	a.registry.DispatchDirect(ctx, ToolCall{ //nolint:errcheck
 		Name: "git_pull", Args: map[string]any{"root": ac.Root, "remote": "origin"},
 	})
 }

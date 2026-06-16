@@ -156,7 +156,9 @@ func (g *PermissionGate) Dispatch(ctx context.Context, call tools.ToolCall, inne
 		return inner.DispatchDirect(ctx, call)
 	}
 
-	// 4. Prompt the user.
+	// 4. Prompt the user. The read runs in a goroutine so a cancelled ctx
+	// (e.g. Ctrl+C during a running task) can interrupt the prompt instead
+	// of blocking forever on stdin.
 	reader := bufio.NewReader(g.in)
 	for {
 		toolLabel := ui.Colour(call.Name, ui.Cyan, g.colour)
@@ -164,13 +166,31 @@ func (g *PermissionGate) Dispatch(ctx context.Context, call tools.ToolCall, inne
 		fmt.Fprintf(g.out, "\n  ⚡ Tool: %s  Category: %s\n", toolLabel, catLabel)
 		fmt.Fprintf(g.out, "  Allow? [y]es / [n]o / [a]ll session for %s  ", category)
 
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				g.emitter.Emit(events.PermissionDeniedEvent(g.sessionID, call.Name, category))
-				return nil, &tools.ToolError{Tool: call.Name, Message: "permission denied by user", Err: ErrPermissionDenied}
+		type readResult struct {
+			line string
+			err  error
+		}
+		resultCh := make(chan readResult, 1)
+		go func() {
+			line, err := reader.ReadString('\n')
+			resultCh <- readResult{line, err}
+		}()
+
+		var line string
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(g.out)
+			g.emitter.Emit(events.PermissionDeniedEvent(g.sessionID, call.Name, category))
+			return nil, ctx.Err()
+		case res := <-resultCh:
+			if res.err != nil {
+				if errors.Is(res.err, io.EOF) {
+					g.emitter.Emit(events.PermissionDeniedEvent(g.sessionID, call.Name, category))
+					return nil, &tools.ToolError{Tool: call.Name, Message: "permission denied by user", Err: ErrPermissionDenied}
+				}
+				return nil, res.err
 			}
-			return nil, err
+			line = res.line
 		}
 
 		switch strings.ToLower(strings.TrimSpace(line)) {
