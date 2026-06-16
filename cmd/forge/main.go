@@ -38,7 +38,7 @@ var (
 	printFlag        = flag.Bool("print", false, "run a task non-interactively and exit")
 	outputFlag       = flag.String("output", "text", "output format in --print mode: text or json")
 	yesFlag          = flag.Bool("yes", false, "approve all patches without prompting")
-	allowedToolsFlag  = flag.String("allowed-tools", "", `comma-separated tool categories to pre-approve.
+	allowedToolsFlag = flag.String("allowed-tools", "", `comma-separated tool categories to pre-approve.
 	Categories: read, git_read, patch. Use "all" to pre-approve everything.
 	Example: --allowed-tools=read,git_read`)
 	allowMainCommit = flag.Bool("allow-main-commit", false,
@@ -46,9 +46,9 @@ var (
 )
 
 type headlessResult struct {
-	Status     string   `json:"status"`     // "success" | "failure" | "rejected"
+	Status     string   `json:"status"` // "success" | "failure" | "rejected"
 	Summary    string   `json:"summary"`
-	Files      []string `json:"files"`      // relative paths of files patched
+	Files      []string `json:"files"` // relative paths of files patched
 	Iterations int      `json:"iterations"`
 }
 
@@ -110,10 +110,10 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory)
 
 	registry := agent.NewRegistry(cwd, emitter, sessionID, nil) // headless: no permission gate
-	confirmer := confirm.AutoConfirmer{} // always — no prompts in headless mode
+	confirmer := confirm.AutoConfirmer{}                        // always — no prompts in headless mode
 	agentCfg := agent.Config{
 		Model:     appCfg.AgentModel,
-		MaxIter:   30,
+		MaxIter:   100,
 		AutoApply: true,
 		Debug:     debug,
 	}
@@ -257,8 +257,8 @@ func runTask(
 
 	agentCfg := agent.Config{
 		Model:   cfg.AgentModel,
-		MaxIter: 30,
-		Debug:   cfg.Debug,
+		MaxIter: 100,
+		Debug:   debug,
 	}
 	preApproved := confirm.ParseAllowedTools(allowedTools)
 	interactive := task.ExecutionPolicy != compiler.PolicyAutonomous && !yesOverride
@@ -339,11 +339,11 @@ func openEditor(initial string) (string, error) {
 // Calls DispatchDirect — bypasses the permission gate since the user has already
 // been asked to confirm via the branch/commit prompt below.
 func runGitWorkflow(
-	ctx      context.Context,
-	ac       *agent.AgentContext,
+	ctx context.Context,
+	ac *agent.AgentContext,
 	registry *agent.Registry,
-	emitter  events.Emitter,
-	auto     bool,
+	emitter events.Emitter,
+	auto bool,
 ) error {
 	// 1. Derive branch name.
 	baseBranch := "forge/" + slugify(ac.Task.RawInput)

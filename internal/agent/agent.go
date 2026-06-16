@@ -18,13 +18,19 @@ import (
 	"github.com/marcoantonios1/Forge/internal/tools"
 )
 
-const defaultMaxIter = 30
+const (
+	defaultMaxIter    = 100
+	defaultStuckAfter = 3 // minimum iterations before stuck check fires
+)
 
 type Config struct {
-	Model     string
-	MaxIter   int
-	AutoApply bool
-	Debug     bool
+	Model                string
+	MaxIter              int
+	AutoApply            bool
+	Debug                bool
+	StuckAfterIterations int // minimum iterations before stuck check; default 3
+	// TODO: expose stuck-window sizes (tool call/result/response history
+	// lengths) as additional Config fields for fine-grained tuning.
 }
 
 // PatchConfirmer abstracts user confirmation for patches.
@@ -57,6 +63,9 @@ func New(
 	if cfg.MaxIter <= 0 {
 		cfg.MaxIter = defaultMaxIter
 	}
+	if cfg.StuckAfterIterations <= 0 {
+		cfg.StuckAfterIterations = defaultStuckAfter
+	}
 	return &Agent{
 		cfg:        cfg,
 		client:     client,
@@ -67,6 +76,83 @@ func New(
 		clarifyIn:  clarifyIn,
 		clarifyOut: clarifyOut,
 	}
+}
+
+// stuckState tracks a rolling window of recent agent activity to detect
+// loops the backstop iteration limit would otherwise take much longer to catch.
+type stuckState struct {
+	recentToolCalls   []string // last 3 tool calls as "toolname:normalized_args_json"
+	recentResponses   []string // last 2 model responses (trimmed)
+	recentToolResults []string // last 3 tool results as "toolname:result_json"
+}
+
+func newStuckState() *stuckState {
+	return &stuckState{}
+}
+
+// recordToolCall appends a normalized tool call fingerprint.
+// Normalisation: marshal args without the "root" key (always injected, never meaningful).
+func (s *stuckState) recordToolCall(name string, args map[string]any) {
+	normalized := make(map[string]any, len(args))
+	for k, v := range args {
+		if k != "root" {
+			normalized[k] = v
+		}
+	}
+	b, _ := json.Marshal(normalized)
+	fp := name + ":" + string(b)
+	s.recentToolCalls = append(s.recentToolCalls, fp)
+	if len(s.recentToolCalls) > 3 {
+		s.recentToolCalls = s.recentToolCalls[len(s.recentToolCalls)-3:]
+	}
+}
+
+// recordResponse appends the trimmed model response.
+func (s *stuckState) recordResponse(response string) {
+	s.recentResponses = append(s.recentResponses, strings.TrimSpace(response))
+	if len(s.recentResponses) > 2 {
+		s.recentResponses = s.recentResponses[len(s.recentResponses)-2:]
+	}
+}
+
+// recordToolResult appends a tool result fingerprint.
+func (s *stuckState) recordToolResult(name string, result any) {
+	b, _ := json.Marshal(result)
+	fp := name + ":" + string(b)
+	s.recentToolResults = append(s.recentToolResults, fp)
+	if len(s.recentToolResults) > 3 {
+		s.recentToolResults = s.recentToolResults[len(s.recentToolResults)-3:]
+	}
+}
+
+// isStuck returns a non-empty reason string if stuck, or "" if not.
+// Only evaluates after minIter iterations have passed.
+func (s *stuckState) isStuck(iteration, minIter int) string {
+	if iteration < minIter {
+		return ""
+	}
+
+	// Condition 1: last 3 tool calls are identical.
+	if len(s.recentToolCalls) == 3 &&
+		s.recentToolCalls[0] == s.recentToolCalls[1] &&
+		s.recentToolCalls[1] == s.recentToolCalls[2] {
+		return "repeated identical tool call: " + s.recentToolCalls[0]
+	}
+
+	// Condition 2: last 2 model responses are identical.
+	if len(s.recentResponses) == 2 &&
+		s.recentResponses[0] == s.recentResponses[1] {
+		return "repeated identical model response"
+	}
+
+	// Condition 3: same tool returned the same result 3 times in a row.
+	if len(s.recentToolResults) == 3 &&
+		s.recentToolResults[0] == s.recentToolResults[1] &&
+		s.recentToolResults[1] == s.recentToolResults[2] {
+		return "tool returning identical result 3 times: " + s.recentToolResults[0][:min(60, len(s.recentToolResults[0]))]
+	}
+
+	return ""
 }
 
 func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
@@ -98,9 +184,31 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		TaskMessage(ac.Task),
 	}
 
+	stuck := newStuckState()
+
 	for {
 		// TODO: context window trimming — truncate ac.History when approaching
 		// model token limit (post-MVP).
+
+		// Step 2.5 — stuck detection (runs before the Costguard call).
+		if reason := stuck.isStuck(ac.Iteration, a.cfg.StuckAfterIterations); reason != "" {
+			stuckMsg := "agent stuck in loop: " + reason
+			a.emitter.Emit(events.Event{
+				Type:      events.EventTaskFailed,
+				Timestamp: time.Now(),
+				SessionID: ac.SessionID,
+				Payload: map[string]any{
+					"session_id": ac.SessionID,
+					"reason":     stuckMsg,
+					"iterations": ac.Iteration,
+				},
+			})
+			return fmt.Errorf("agent: %s", stuckMsg)
+		}
+
+		if a.cfg.Debug {
+			fmt.Fprintf(os.Stderr, "[agent] iteration %d/%d\n", ac.Iteration+1, a.cfg.MaxIter)
+		}
 
 		messages := append(baseMessages, ac.History...)
 
@@ -117,6 +225,7 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 
 		response := strings.TrimSpace(resp.Choices[0].Message.Content)
 		ac.History = append(ac.History, costguard.Message{Role: "assistant", Content: response})
+		stuck.recordResponse(response)
 
 		// Step 3 — parse response.
 		switch {
@@ -146,6 +255,8 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 
 		// c) FORGE_PATCH_BEGIN...FORGE_PATCH_END
 		case strings.Contains(response, "FORGE_PATCH_BEGIN"):
+			// TODO: reset stuck state after a successful patch application —
+			// applying a patch counts as genuine progress, not a loop.
 			if err := a.handlePatch(ctx, ac, response); err != nil {
 				return err
 			}
@@ -160,7 +271,10 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 			}
 			// Always force root to the repo root — the model must not control it.
 			call.Args["root"] = ac.Root
+			// Record for stuck detection.
+			stuck.recordToolCall(call.Name, call.Args)
 			result, err := a.registry.Dispatch(ctx, call)
+			stuck.recordToolResult(call.Name, result)
 			ac.History = append(ac.History, ToolResultMessage(call.Name, result, err))
 
 		// e) unrecognised
@@ -169,16 +283,21 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 				"Unrecognised response format. Emit a tool call, FORGE_PATCH_BEGIN block, FORGE_DONE, or FORGE_FAILED."))
 		}
 
-		// Step 4 — iteration limit.
+		// Step 4 — backstop iteration limit (stuck detector fires first in practice).
 		ac.Iteration++
 		if ac.Iteration >= a.cfg.MaxIter {
+			backstopMsg := fmt.Sprintf("task exceeded maximum iterations (%d)", a.cfg.MaxIter)
 			a.emitter.Emit(events.Event{
 				Type:      events.EventTaskFailed,
 				Timestamp: time.Now(),
 				SessionID: ac.SessionID,
-				Payload:   map[string]any{"session_id": ac.SessionID, "reason": "max iterations reached", "iterations": ac.Iteration},
+				Payload: map[string]any{
+					"session_id": ac.SessionID,
+					"reason":     backstopMsg,
+					"iterations": ac.Iteration,
+				},
 			})
-			return fmt.Errorf("agent: max iterations (%d) reached", a.cfg.MaxIter)
+			return fmt.Errorf("agent: %s", backstopMsg)
 		}
 	}
 }
