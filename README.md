@@ -186,26 +186,26 @@ After a task applies at least one patch, Forge proposes a branch (off `main`/`ma
 
 ```
 cmd/forge/
-    main.go               entry point, REPL, flag parsing, init/headless subcommands,
-                           Ctrl+C handling, git workflow proposal
+    main.go            entry point, REPL, flag parsing, init/headless subcommands,
+                        Ctrl+C handling, git workflow proposal
 
 internal/
-    config/                env + .env loader
-    session/                crypto/rand session IDs
-    projectconfig/          forge.md loader
-    forgeinit/               `forge init` filesystem heuristics (build/test/language detection)
-    compiler/               natural language → typed Task struct
-    costguard/               OpenAI-compatible HTTP client with retry/backoff
-    agent/                   control loop, tool registry, system prompt, clarification,
-                             stuck detector
-    tools/                   read_file, list_files, search_code, git_status/diff/log,
-                             run_command (agent-callable); git_branch/checkout/stash/pull/
-                             commit/push (Forge-internal repo prep and git workflow)
-    patch/                   unified diff parser (incl. new files), validator, atomic
-                             applier, undo history
-    confirm/                 AutoConfirmer, NullConfirmer, SafeConfirmer, PermissionGate
-    events/                  event types, Emitter interface, Multi fan-out
-    ui/                      terminal renderer, diff coloriser, TTY detection
+    config/            env + .env loader
+    session/           crypto/rand session IDs
+    projectconfig/     forge.md loader
+    forgeinit/         `forge init` filesystem heuristics (build/test/language detection)
+    compiler/          natural language → typed Task struct
+    costguard/         OpenAI-compatible HTTP client with retry/backoff
+    agent/             control loop, tool registry, system prompt, clarification,
+                       stuck detector
+    tools/             read_file, list_files, search_code, git_status/diff/log,
+                       run_command (agent-callable); git_branch/checkout/stash/pull/
+                       commit/push (Forge-internal repo prep and git workflow)
+    patch/             unified diff parser (incl. new files), validator, atomic
+                       applier, undo history
+    confirm/           AutoConfirmer, NullConfirmer, SafeConfirmer, PermissionGate
+    events/            event types, Emitter interface, Multi fan-out
+    ui/                terminal renderer, diff coloriser, TTY detection
 ```
 
 ## Development
