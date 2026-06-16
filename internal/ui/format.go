@@ -30,6 +30,8 @@ func num(payload map[string]any, key string) int {
 	switch v := payload[key].(type) {
 	case int:
 		return v
+	case int64:
+		return int(v)
 	case float64:
 		return int(v)
 	}
