@@ -9,6 +9,8 @@ import (
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 )
 
+// TODO: surface which categories are pre-approved via --allowed-tools=run in
+// the prompt so the agent knows run_command won't prompt for this session.
 const agentSystemPrompt = `You are Forge, an autonomous software engineering agent.
 You receive structured engineering tasks. You operate exclusively via tool calls.
 You never produce prose explanations — only tool calls or one of the terminal signals.
