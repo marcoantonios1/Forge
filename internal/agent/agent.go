@@ -337,7 +337,27 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 		return ac.Task
 	}
 
-	line, err := bufio.NewReader(a.clarifyIn).ReadString('\n')
+	// Read the answer in a goroutine so a cancelled ctx (Ctrl+C) interrupts
+	// the prompt instead of blocking forever on stdin.
+	type readResult struct {
+		line string
+		err  error
+	}
+	resultCh := make(chan readResult, 1)
+	go func() {
+		line, err := bufio.NewReader(a.clarifyIn).ReadString('\n')
+		resultCh <- readResult{line, err}
+	}()
+
+	var line string
+	select {
+	case <-ctx.Done():
+		a.emitter.Emit(events.ClarificationAnsweredEvent(ac.SessionID, "", false))
+		return ac.Task
+	case res := <-resultCh:
+		line, err = res.line, res.err
+	}
+
 	answer := strings.TrimSpace(line)
 	if err != nil || answer == "" {
 		a.emitter.Emit(events.ClarificationAnsweredEvent(ac.SessionID, "", false))
