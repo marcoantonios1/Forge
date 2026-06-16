@@ -1,5 +1,3 @@
-// Main entry point for the Forge autonomous software and engineering agent.
-
 package main
 
 import (
@@ -260,7 +258,7 @@ func runTask(
 	agentCfg := agent.Config{
 		Model:   cfg.AgentModel,
 		MaxIter: 100,
-		Debug:   cfg.Debug,
+		Debug:   debug,
 	}
 	preApproved := confirm.ParseAllowedTools(allowedTools)
 	interactive := task.ExecutionPolicy != compiler.PolicyAutonomous && !yesOverride
