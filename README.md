@@ -13,8 +13,8 @@ compiled: feature/module [supervised]
   →  search_code  validateInput
   ✓  search_code  found 0 matches
 ┌─ Patch preview ────────────────────────────────┐
-│  1 file(s) will be modified                      │
-└──────────────────────────────────────────────────┘
+│  1 file(s) will be modified                    │
+└────────────────────────────────────────────────┘
 Apply this patch? [y]es / [n]o / [a]ll session  y
   ✔  Applied  internal/auth/handler.go  (1 hunks)
 ╔══════════════════════════════════════════╗
