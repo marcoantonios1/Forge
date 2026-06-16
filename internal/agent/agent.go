@@ -30,7 +30,7 @@ type Config struct {
 // PatchConfirmer abstracts user confirmation for patches.
 // Autonomous mode: always returns true. Supervised/safe: prompts the user.
 type PatchConfirmer interface {
-	Confirm(ps *patch.PatchSet) (bool, error)
+	Confirm(ctx context.Context, ps *patch.PatchSet) (bool, error)
 }
 
 type Agent struct {
@@ -210,7 +210,7 @@ func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response stri
 		return nil
 	}
 
-	confirmed, err := a.patcher.Confirm(ps)
+	confirmed, err := a.patcher.Confirm(ctx, ps)
 	if err != nil {
 		return fmt.Errorf("agent: patch confirmation error: %w", err)
 	}
