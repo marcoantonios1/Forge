@@ -219,4 +219,4 @@ go test ./... # run unit tests
 
 ## License
 
-MIT
+Apache 2.0
