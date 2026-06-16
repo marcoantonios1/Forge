@@ -7,11 +7,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
-	"io"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/confirm"
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
+	"github.com/marcoantonios1/Forge/internal/forgeinit"
 	"github.com/marcoantonios1/Forge/internal/patch"
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 	"github.com/marcoantonios1/Forge/internal/session"
@@ -525,8 +527,46 @@ func handleUndo(root string, history *patch.PatchHistory, emitter events.Emitter
 	fmt.Println("undo complete")
 }
 
+// runInit implements `forge init`: detects project conventions via filesystem
+// heuristics (no LLM call) and writes a starter forge.md to the repo root.
+// TODO: `forge init --llm` would make a Costguard call to generate richer
+// project conventions from the actual source files.
+func runInit() int {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	forgePath := filepath.Join(cwd, "forge.md")
+	if _, err := os.Stat(forgePath); err == nil {
+		fmt.Print("forge.md already exists. Overwrite? [y/n]  ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		if strings.ToLower(strings.TrimSpace(line)) != "y" {
+			fmt.Println("Aborted.")
+			return 0
+		}
+	}
+
+	d := forgeinit.Detect(cwd)
+	content := forgeinit.Render(d)
+
+	if err := os.WriteFile(forgePath, []byte(content), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "forge init: write failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Wrote forge.md:\n\n%s\n", content)
+	return 0
+}
+
 func main() {
 	flag.Parse()
+
+	if flag.NArg() > 0 && flag.Arg(0) == "init" {
+		os.Exit(runInit())
+	}
 
 	if *printFlag {
 		task := strings.Join(flag.Args(), " ")
