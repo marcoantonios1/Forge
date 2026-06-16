@@ -147,5 +147,7 @@ func makefileHasTarget(dir, target string) bool {
 			return true
 		}
 	}
+	// scanner.Err() intentionally ignored — a read error means "not found",
+	// same as a missing file (this function never reports errors).
 	return false
 }
