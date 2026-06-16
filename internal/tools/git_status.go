@@ -36,9 +36,6 @@ func isNotGitRepo(err error) bool {
 		strings.Contains(msg, "not inside a git repository")
 }
 
-// TODO: git_commit tool (write path) — post-MVP
-// TODO: git_branch tool (create/switch branches) — post-MVP
-
 type GitStatusTool struct{}
 
 func (t *GitStatusTool) Name() string { return "git_status" }
