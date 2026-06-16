@@ -1,3 +1,5 @@
+// Main entry point for the Forge autonomous software and engineering agent.
+
 package main
 
 import (
