@@ -33,6 +33,10 @@ Available tools and their required arguments:
   git_log
     ARGS: {"root": "<repo root>", "limit": <int, optional>, "path": "<file, optional>"}
 
+  run_command
+    ARGS: {"command": "<shell command>", "root": "<repo root>",
+           "timeout_seconds": <int, optional, default 30>}
+
 To call a tool, emit exactly:
   TOOL: <name>
   ARGS: {"key": "value", ...}
@@ -64,7 +68,11 @@ Rules:
 - A FORGE_PATCH_BEGIN block must always be followed by FORGE_DONE in the next turn
 - Prefer targeted reads (specific file + line range) over full-repo scans
 - If the task execution_policy is "safe", describe what you would do but wait
-  for FORGE_PATCH confirmation before applying`
+  for FORGE_PATCH confirmation before applying
+- run_command may only be used for build/test/lint/check commands relevant to
+  the current task. Never use it for rm, mv, dd, chmod, chown, or any command
+  that modifies system state outside the repo. Violating this rule is grounds
+  for FORGE_FAILED.`
 
 // Clarification for supervised tasks is handled in agent.clarify() — see agent.go.
 
