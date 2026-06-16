@@ -1,3 +1,5 @@
+// main.go is the entry point for the Forge CLI tool.
+
 package main
 
 import (
