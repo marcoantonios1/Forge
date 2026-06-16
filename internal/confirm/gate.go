@@ -32,6 +32,7 @@ var toolCategory = map[string]string{
 	"git_pull":     "git_write",
 	"git_commit":   "git_write",
 	"git_push":     "git_write",
+	"run_command":  "run",
 }
 
 // allCategories is the complete set of known categories used by "all" expansion.
@@ -40,6 +41,7 @@ var allCategories = map[string]bool{
 	"git_read":  true,
 	"patch":     true,
 	"git_write": true,
+	"run":       true,
 }
 
 // ParseAllowedTools splits a comma-separated string into a set of pre-approved
