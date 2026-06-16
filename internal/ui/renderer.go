@@ -85,6 +85,12 @@ func (r *Renderer) Emit(e events.Event) {
 		line = formatGitPush(e, r.colour)
 	case events.EventGitStash:
 		line = formatGitStash(e, r.colour)
+	case events.EventCommandStarted:
+		line = formatCommandStarted(e, r.colour)
+	case events.EventCommandOutput:
+		line = formatCommandOutput(e, r.colour)
+	case events.EventCommandFinished:
+		line = formatCommandFinished(e, r.colour)
 	case events.EventTaskFailed:
 		line = formatTaskFailed(e, r.colour)
 	case events.EventConfirmDecision:

@@ -30,6 +30,8 @@ func num(payload map[string]any, key string) int {
 	switch v := payload[key].(type) {
 	case int:
 		return v
+	case int64:
+		return int(v)
 	case float64:
 		return int(v)
 	}
@@ -192,6 +194,38 @@ func formatGitStash(e events.Event, colour bool) string {
 	action := str(e.Payload, "action")
 	g := glyph("≡", "~", colour)
 	return fmt.Sprintf("  %s  Stash %s", g, Colour(action, Yellow, colour))
+}
+
+func formatCommandStarted(e events.Event, colour bool) string {
+	command := str(e.Payload, "command")
+	g := Colour(glyph("▶", ">", colour), Yellow, colour)
+	return fmt.Sprintf("  %s  run  %s", g, Colour(command, Bold, colour))
+}
+
+func formatCommandOutput(e events.Event, colour bool) string {
+	line, _ := e.Payload["line"].(string)
+	stream := str(e.Payload, "stream")
+	if stream == "stderr" {
+		return "     " + Colour(line, Yellow, colour)
+	}
+	return "     " + Colour(line, White, colour)
+}
+
+func formatCommandFinished(e events.Event, colour bool) string {
+	exitCode := num(e.Payload, "exit_code")
+	timedOut, _ := e.Payload["timed_out"].(bool)
+	durationMs := int64(num(e.Payload, "duration_ms"))
+
+	if timedOut {
+		g := glyph("✘", "x", colour)
+		return Colour(fmt.Sprintf("  %s  timed out  (%dms)", g, durationMs), Red, colour)
+	}
+	if exitCode == 0 {
+		g := glyph("✓", ">", colour)
+		return Colour(fmt.Sprintf("  %s  done  exit 0  (%dms)", g, durationMs), Green, colour)
+	}
+	g := glyph("✘", "x", colour)
+	return Colour(fmt.Sprintf("  %s  done  exit %d  (%dms)", g, exitCode, durationMs), Red, colour)
 }
 
 func extractStringSlice(v any) []string {

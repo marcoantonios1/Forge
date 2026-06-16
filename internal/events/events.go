@@ -29,6 +29,10 @@ const (
 	EventGitCommit EventType = "git.commit"
 	EventGitPush   EventType = "git.push"
 	EventGitStash  EventType = "git.stash"
+
+	EventCommandStarted  EventType = "command.started"
+	EventCommandOutput   EventType = "command.output"
+	EventCommandFinished EventType = "command.finished"
 )
 
 type Event struct {
@@ -146,6 +150,39 @@ func GitStashEvent(sessionID, action string) Event {
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 		Payload:   map[string]any{"session_id": sessionID, "action": action},
+	}
+}
+
+func CommandStartedEvent(sessionID, command, root string) Event {
+	return Event{
+		Type:      EventCommandStarted,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload:   map[string]any{"session_id": sessionID, "command": command, "root": root},
+	}
+}
+
+func CommandOutputEvent(sessionID, command, stream, line string) Event {
+	return Event{
+		Type:      EventCommandOutput,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload:   map[string]any{"session_id": sessionID, "command": command, "stream": stream, "line": line},
+	}
+}
+
+func CommandFinishedEvent(sessionID, command string, exitCode int, timedOut bool, durationMs int64) Event {
+	return Event{
+		Type:      EventCommandFinished,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload: map[string]any{
+			"session_id":  sessionID,
+			"command":     command,
+			"exit_code":   exitCode,
+			"timed_out":   timedOut,
+			"duration_ms": durationMs,
+		},
 	}
 }
 

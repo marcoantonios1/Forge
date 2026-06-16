@@ -44,6 +44,7 @@ func NewRegistry(root string, emitter events.Emitter, sessionID string, gate *co
 	// TODO: allow agent to call git_commit directly when execution_policy=autonomous.
 	register(&tools.GitCommitTool{})
 	register(&tools.GitPushTool{})
+	register(tools.NewRunCommandTool(emitter, sessionID))
 
 	// Default root for all tools that accept it.
 	_ = root // callers inject "root" into args per-call
