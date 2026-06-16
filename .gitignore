@@ -9,6 +9,7 @@ _smoke
 # Go build output
 /bin
 *.test
+forge.md
 
 # Logs
 *.log
