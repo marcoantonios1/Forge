@@ -19,9 +19,11 @@ var ErrPermissionDenied = errors.New("permission denied by user")
 
 // toolCategory maps each tool name to its permission category.
 var toolCategory = map[string]string{
-	"read_file":   "read",
-	"list_files":  "read",
-	"search_code": "read",
+	"read_file":       "read",
+	"list_files":      "read",
+	"write_file":      "patch",
+	"search_code":     "read",
+	"semantic_search": "read",
 	"git_status":  "git_read",
 	"git_diff":    "git_read",
 	"git_log":     "git_read",

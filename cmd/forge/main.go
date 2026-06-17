@@ -22,6 +22,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/agent"
 	"github.com/marcoantonios1/Forge/internal/compiler"
 	"github.com/marcoantonios1/Forge/internal/config"
+	"github.com/marcoantonios1/Forge/internal/embeddings"
 	"github.com/marcoantonios1/Forge/internal/confirm"
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
@@ -93,6 +94,33 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 	cgClient := costguard.New(appCfg)
 	comp := compiler.New(cgClient, appCfg.CompilerModel, debug)
 
+	// 5b. Embedding index (skipped when FORGE_EMBEDDING_MODEL is unset).
+	// TODO: print a one-time hint when EmbeddingModel is unset:
+	// "Set FORGE_EMBEDDING_MODEL to enable semantic search across the repo"
+	var embedClient *embeddings.EmbedClient
+	var index *embeddings.Index
+	if appCfg.EmbeddingModel != "" {
+		embedClient = embeddings.NewEmbedClient(cgClient, appCfg.EmbeddingModel)
+		existing, loadErr := embeddings.Load(cwd)
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to load existing index: %v\n", loadErr)
+		}
+		fmt.Fprint(os.Stderr, "Indexing repo...")
+		newIndex, buildErr := embeddings.Build(ctx, cwd, embedClient, existing,
+			func(current, total int, path string) {
+				fmt.Fprintf(os.Stderr, "\rIndexing repo... %d/%d files", current, total)
+			})
+		if buildErr != nil {
+			fmt.Fprintf(os.Stderr, "\nwarning: indexing failed: %v — semantic_search will fall back to grep\n", buildErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "\rIndexing repo... %d files done.\n", len(newIndex.FileHashes))
+			if saveErr := embeddings.Save(cwd, newIndex); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to save index: %v\n", saveErr)
+			}
+			index = newIndex
+		}
+	}
+
 	// 6. Compile.
 	task, err := comp.Compile(ctx, rawTask)
 	var reject *compiler.RejectionError
@@ -109,8 +137,8 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 	sessionHistory := patch.NewPatchHistory()
 	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory)
 
-	registry := agent.NewRegistry(cwd, emitter, sessionID, nil) // headless: no permission gate
-	confirmer := confirm.AutoConfirmer{}                        // always — no prompts in headless mode
+	registry := agent.NewRegistry(cwd, emitter, sessionID, nil, embedClient, index) // headless: no permission gate
+	confirmer := confirm.AutoConfirmer{}                                             // always — no prompts in headless mode
 	agentCfg := agent.Config{
 		PlannerModel:    appCfg.PlannerModel,
 		CoderModel:      appCfg.CoderModel,
@@ -241,6 +269,8 @@ func runTask(
 	yesOverride bool,
 	allowedTools string,
 	debug bool,
+	embedClient *embeddings.EmbedClient,
+	index *embeddings.Index,
 ) error {
 	task, err := comp.Compile(ctx, line)
 	if err != nil {
@@ -277,7 +307,7 @@ func runTask(
 		preApproved,
 		interactive,
 	)
-	registry := agent.NewRegistry(cwd, renderer, sessionID, gate)
+	registry := agent.NewRegistry(cwd, renderer, sessionID, gate, embedClient, index)
 	a := agent.New(agentCfg, client, registry, renderer, confirmer, comp, os.Stdin, os.Stderr)
 	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory)
 
@@ -615,6 +645,35 @@ func main() {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
+	// 6b. Embedding index (skipped when FORGE_EMBEDDING_MODEL is unset).
+	// TODO: print a one-time hint when EmbeddingModel is unset:
+	// "Set FORGE_EMBEDDING_MODEL to enable semantic search across the repo"
+	var embedClient *embeddings.EmbedClient
+	var index *embeddings.Index
+	if cfg.EmbeddingModel != "" {
+		embedClient = embeddings.NewEmbedClient(client, cfg.EmbeddingModel)
+		existing, loadErr := embeddings.Load(cwd)
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to load existing index: %v\n", loadErr)
+		}
+		fmt.Fprint(os.Stderr, "Indexing repo...")
+		// Build() respects ctx cancellation; use Background here since the main
+		// signal handler is installed after startup completes.
+		newIndex, buildErr := embeddings.Build(context.Background(), cwd, embedClient, existing,
+			func(current, total int, path string) {
+				fmt.Fprintf(os.Stderr, "\rIndexing repo... %d/%d files", current, total)
+			})
+		if buildErr != nil {
+			fmt.Fprintf(os.Stderr, "\nwarning: indexing failed: %v — semantic_search will fall back to grep\n", buildErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "\rIndexing repo... %d files done.\n", len(newIndex.FileHashes))
+			if saveErr := embeddings.Save(cwd, newIndex); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to save index: %v\n", saveErr)
+			}
+			index = newIndex
+		}
+	}
+
 	// 7. Session
 	id := session.NewID()
 	fmt.Printf("Forge — session %s\n", id)
@@ -682,7 +741,7 @@ func main() {
 		taskMu.Unlock()
 
 		runErr := runTask(ctx, line, cwd, cfg, client, comp, renderer,
-			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag)
+			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag, embedClient, index)
 
 		cancel()
 		taskMu.Lock()

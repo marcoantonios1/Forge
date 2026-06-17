@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/marcoantonios1/Forge/internal/confirm"
+	"github.com/marcoantonios1/Forge/internal/embeddings"
 	"github.com/marcoantonios1/Forge/internal/events"
 	"github.com/marcoantonios1/Forge/internal/tools"
 )
@@ -18,7 +19,14 @@ type Registry struct {
 	gate    *confirm.PermissionGate // nil = no gating (autonomous / headless)
 }
 
-func NewRegistry(root string, emitter events.Emitter, sessionID string, gate *confirm.PermissionGate) *Registry {
+func NewRegistry(
+	root string,
+	emitter events.Emitter,
+	sessionID string,
+	gate *confirm.PermissionGate,
+	embedClient *embeddings.EmbedClient,
+	index *embeddings.Index,
+) *Registry {
 	reg := &Registry{
 		runners: make(map[string]*tools.ToolRunner),
 		gate:    gate,
@@ -30,7 +38,9 @@ func NewRegistry(root string, emitter events.Emitter, sessionID string, gate *co
 
 	register(&tools.ReadFileTool{})
 	register(&tools.ListFilesTool{})
+	register(&tools.WriteFileTool{})
 	register(&tools.SearchCodeTool{})
+	register(tools.NewSemanticSearchTool(embedClient, index, root))
 	register(&tools.GitStatusTool{})
 	register(&tools.GitDiffTool{})
 	register(&tools.GitLogTool{})

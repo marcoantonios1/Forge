@@ -26,6 +26,11 @@ Available tools and their required arguments:
   search_code
     ARGS: {"root": "<directory>", "pattern": "<search string>", "file_glob": "<glob, optional>", "regex": <bool, optional>}
 
+  semantic_search
+    ARGS: {"query": "<natural language description of what you're looking for>", "top_n": <int, optional, default 5>}
+    Use this for ambiguous or repo-wide tasks where you don't know which files
+    are relevant. Falls back to literal search automatically if unavailable.
+
   git_status
     ARGS: {"root": "<repo root>"}
 
@@ -87,7 +92,10 @@ Rules:
 - run_command may only be used for build/test/lint/check commands relevant to
   the current task. Never use it for rm, mv, dd, chmod, chown, or any command
   that modifies system state outside the repo. Violating this rule is grounds
-  for FORGE_FAILED.`
+  for FORGE_FAILED.
+- run_command does NOT support shell operators (>, >>, |, &&, ;). Use write_file
+  to create or replace files. Use patch blocks for targeted edits to existing files.
+  Never pipe or redirect inside run_command — it will not work.`
 
 // Clarification for supervised tasks is handled in agent.clarify() — see agent.go.
 
@@ -102,13 +110,15 @@ Never explain your reasoning. Never emit prose. If the intent is ambiguous,
 make the most reasonable interpretation and still emit a valid tool call.`
 
 const availableToolsList = `
-read_file       ARGS: {"path": "<file path>", "max_lines": <int, optional>}
-list_files      ARGS: {"root": "<dir>", "pattern": "<glob, optional>"}
-search_code     ARGS: {"root": "<dir>", "pattern": "<string>", "regex": <bool, optional>}
-git_status      ARGS: {}
-git_diff        ARGS: {"staged": <bool, optional>}
-git_log         ARGS: {"limit": <int, optional>}
-run_command     ARGS: {"command": "<shell command>", "timeout_seconds": <int, optional>}
+read_file         ARGS: {"path": "<file path>", "max_lines": <int, optional>}
+list_files        ARGS: {"root": "<dir>", "pattern": "<glob, optional>"}
+write_file        ARGS: {"root": "<dir>", "path": "<relative path>", "content": "<full file content>"}
+search_code       ARGS: {"root": "<dir>", "pattern": "<string>", "regex": <bool, optional>}
+semantic_search   ARGS: {"query": "<natural language description>", "top_n": <int, optional, default 5>}
+git_status        ARGS: {}
+git_diff          ARGS: {"staged": <bool, optional>}
+git_log           ARGS: {"limit": <int, optional>}
+run_command       ARGS: {"command": "<shell command>", "timeout_seconds": <int, optional>}
 `
 // Keep this list in sync with the tools actually registered in agent.Registry.
 // git_commit and git_push are intentionally omitted — they are not agent-callable.

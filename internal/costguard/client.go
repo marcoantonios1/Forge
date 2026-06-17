@@ -96,6 +96,75 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 	}
 }
 
+// Embed calls POST /v1/embeddings. Same retry/backoff/error handling as Chat().
+func (c *Client) Embed(ctx context.Context, req EmbeddingRequest) (*EmbeddingResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("costguard: marshal request: %w", err)
+	}
+
+	url := c.base + "/v1/embeddings"
+
+	var (
+		attempt int
+		base    = 200 * time.Millisecond
+		maxWait = 10 * time.Second
+	)
+
+	for {
+		attempt++
+		start := time.Now()
+
+		if c.cfg.Debug {
+			fmt.Fprintf(os.Stderr, "[costguard] → POST /v1/embeddings model=%s\n", req.Model)
+		}
+
+		httpResp, err := c.do(ctx, url, body)
+		if err != nil {
+			return nil, err
+		}
+
+		elapsed := time.Since(start)
+		statusCode := httpResp.StatusCode
+		respBody, _ := io.ReadAll(httpResp.Body)
+		httpResp.Body.Close()
+
+		if statusCode >= 200 && statusCode < 300 {
+			var er EmbeddingResponse
+			if err := json.Unmarshal(respBody, &er); err != nil {
+				return nil, fmt.Errorf("costguard: decode embedding response: %w", err)
+			}
+			if c.cfg.Debug {
+				dims := 0
+				if len(er.Data) > 0 {
+					dims = len(er.Data[0].Embedding)
+				}
+				fmt.Fprintf(os.Stderr, "[costguard] ← %d in %dms dims=%d\n",
+					statusCode, elapsed.Milliseconds(), dims)
+			}
+			return &er, nil
+		}
+
+		cgErr := parseError(statusCode, respBody)
+
+		if !isRetryable(statusCode) || attempt > c.cfg.MaxRetries {
+			return nil, cgErr
+		}
+
+		wait := backoff(base, attempt, maxWait)
+		if c.cfg.Debug {
+			fmt.Fprintf(os.Stderr, "[costguard] ← %d retrying in %dms (attempt %d/%d)\n",
+				statusCode, wait.Milliseconds(), attempt, c.cfg.MaxRetries)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
 func (c *Client) do(ctx context.Context, url string, body []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {

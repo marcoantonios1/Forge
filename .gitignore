@@ -20,3 +20,5 @@ forge.md
 
 # Claude Code session data
 .claude/
+# Forge local index
+.forge/

@@ -27,3 +27,21 @@ type ChatResponse struct {
 	Choices []Choice `json:"choices"`
 	Usage   Usage    `json:"usage"`
 }
+
+type EmbeddingRequest struct {
+	Model string `json:"model"`
+	Input string `json:"input"`
+}
+
+type EmbeddingData struct {
+	Object    string    `json:"object"`
+	Index     int       `json:"index"`
+	Embedding []float64 `json:"embedding"`
+}
+
+type EmbeddingResponse struct {
+	Object string          `json:"object"`
+	Data   []EmbeddingData `json:"data"`
+	Model  string          `json:"model"`
+	Usage  Usage           `json:"usage"`
+}
