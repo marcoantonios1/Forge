@@ -24,6 +24,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/config"
 	"github.com/marcoantonios1/Forge/internal/embeddings"
 	"github.com/marcoantonios1/Forge/internal/confirm"
+	"github.com/marcoantonios1/Forge/internal/memory"
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
 	"github.com/marcoantonios1/Forge/internal/forgeinit"
@@ -85,6 +86,13 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
+	// 4b. Persistent memory.
+	mem, err := memory.Load(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to load memory: %v\n", err)
+		mem = &memory.Memory{Version: memory.CurrentVersion, TaskHistory: []memory.TaskHistoryEntry{}}
+	}
+
 	// 5. Costguard client + compiler.
 	appCfg, err := config.Load()
 	if err != nil {
@@ -135,7 +143,7 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 
 	// 7. Session history + agent setup.
 	sessionHistory := patch.NewPatchHistory()
-	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory)
+	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory, mem)
 
 	registry := agent.NewRegistry(cwd, emitter, sessionID, nil, embedClient, index) // headless: no permission gate
 	confirmer := confirm.AutoConfirmer{}                                             // always — no prompts in headless mode
@@ -157,6 +165,24 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 	if runErr == nil && ac.Patches.Len() > 0 {
 		if err := runGitWorkflow(ctx, ac, registry, emitter, true); err != nil {
 			fmt.Fprintf(os.Stderr, "git workflow: %v\n", err)
+		}
+	}
+
+	// Persist memory after a successful run.
+	if runErr == nil {
+		var memFiles []string
+		for _, rec := range sessionHistory.AllRecords() {
+			if !rec.Reverted {
+				for p := range rec.Originals {
+					memFiles = append(memFiles, p)
+				}
+			}
+		}
+		sort.Strings(memFiles)
+		memFiles = dedup(memFiles)
+		mem.Update(ac.LastSummary, memFiles, memory.Conventions{})
+		if err := memory.Save(cwd, mem); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to save memory: %v\n", err)
 		}
 	}
 
@@ -271,6 +297,7 @@ func runTask(
 	debug bool,
 	embedClient *embeddings.EmbedClient,
 	index *embeddings.Index,
+	mem *memory.Memory,
 ) error {
 	task, err := comp.Compile(ctx, line)
 	if err != nil {
@@ -309,7 +336,7 @@ func runTask(
 	)
 	registry := agent.NewRegistry(cwd, renderer, sessionID, gate, embedClient, index)
 	a := agent.New(agentCfg, client, registry, renderer, confirmer, comp, os.Stdin, os.Stderr)
-	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory)
+	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory, mem)
 
 	if err := a.Run(ctx, ac); err != nil {
 		return err
@@ -319,6 +346,22 @@ func runTask(
 		if err := runGitWorkflow(ctx, ac, registry, renderer, auto); err != nil {
 			fmt.Fprintf(os.Stderr, "git workflow: %v\n", err)
 		}
+	}
+
+	// Persist memory after a successful task.
+	var memFiles []string
+	for _, rec := range sessionHistory.AllRecords() {
+		if !rec.Reverted {
+			for p := range rec.Originals {
+				memFiles = append(memFiles, p)
+			}
+		}
+	}
+	sort.Strings(memFiles)
+	memFiles = dedup(memFiles)
+	mem.Update(ac.LastSummary, memFiles, memory.Conventions{})
+	if err := memory.Save(cwd, mem); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to save memory: %v\n", err)
 	}
 	return nil
 }
@@ -597,11 +640,50 @@ func runInit() int {
 	return 0
 }
 
+func runMemoryCommand(args []string) int {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: forge memory <show|clear>")
+		return 2
+	}
+	// TODO: add --json flag to `forge memory show` for a human-readable summary
+	// view vs the current raw JSON output.
+	switch args[0] {
+	case "show":
+		mem, err := memory.Load(cwd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "memory: %v\n", err)
+			return 1
+		}
+		data, _ := json.MarshalIndent(mem, "", "  ")
+		fmt.Println(string(data))
+		return 0
+	case "clear":
+		if err := memory.Clear(cwd); err != nil {
+			fmt.Fprintf(os.Stderr, "memory: %v\n", err)
+			return 1
+		}
+		fmt.Println("memory cleared")
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "usage: forge memory <show|clear>, got %q\n", args[0])
+		return 2
+	}
+}
+
 func main() {
 	flag.Parse()
 
 	if flag.NArg() > 0 && flag.Arg(0) == "init" {
 		os.Exit(runInit())
+	}
+
+	if flag.NArg() > 0 && flag.Arg(0) == "memory" {
+		os.Exit(runMemoryCommand(flag.Args()[1:]))
 	}
 
 	if *printFlag {
@@ -645,7 +727,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
-	// 6b. Embedding index (skipped when FORGE_EMBEDDING_MODEL is unset).
+	// 6b. Persistent memory.
+	mem, err := memory.Load(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to load memory: %v\n", err)
+		mem = &memory.Memory{Version: memory.CurrentVersion, TaskHistory: []memory.TaskHistoryEntry{}}
+	}
+
+	// 6c. Embedding index (skipped when FORGE_EMBEDDING_MODEL is unset).
 	// TODO: print a one-time hint when EmbeddingModel is unset:
 	// "Set FORGE_EMBEDDING_MODEL to enable semantic search across the repo"
 	var embedClient *embeddings.EmbedClient
@@ -741,7 +830,7 @@ func main() {
 		taskMu.Unlock()
 
 		runErr := runTask(ctx, line, cwd, cfg, client, comp, renderer,
-			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag, embedClient, index)
+			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag, embedClient, index, mem)
 
 		cancel()
 		taskMu.Lock()
