@@ -38,6 +38,7 @@ func NewRegistry(
 
 	register(&tools.ReadFileTool{})
 	register(&tools.ListFilesTool{})
+	register(&tools.WriteFileTool{})
 	register(&tools.SearchCodeTool{})
 	register(tools.NewSemanticSearchTool(embedClient, index, root))
 	register(&tools.GitStatusTool{})
