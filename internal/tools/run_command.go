@@ -127,9 +127,9 @@ func (t *RunCommandTool) Run(ctx context.Context, args map[string]any) (any, err
 			line := sc.Text()
 			bufMu.Lock()
 			if streamName == "stdout" {
-				stdoutBuf.WriteString(line + "\n")
+				stdoutBuf.WriteString(line);stdoutBuf.WriteString("\n")
 			} else {
-				stderrBuf.WriteString(line + "\n")
+				stderrBuf.WriteString(line);stderrBuf.WriteString("\n")
 			}
 			bufMu.Unlock()
 			t.emitter.Emit(events.CommandOutputEvent(t.sessionID, command, streamName, line))
