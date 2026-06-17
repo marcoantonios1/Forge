@@ -112,10 +112,13 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 	registry := agent.NewRegistry(cwd, emitter, sessionID, nil) // headless: no permission gate
 	confirmer := confirm.AutoConfirmer{}                        // always — no prompts in headless mode
 	agentCfg := agent.Config{
-		Model:     appCfg.AgentModel,
-		MaxIter:   100,
-		AutoApply: true,
-		Debug:     debug,
+		PlannerModel:    appCfg.PlannerModel,
+		CoderModel:      appCfg.CoderModel,
+		ToolCallerModel: appCfg.ToolCallerModel,
+		CompactorModel:  appCfg.CompactorModel,
+		MaxIter:         100,
+		AutoApply:       true,
+		Debug:           debug,
 	}
 	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer, nil, nil, nil)
 
@@ -256,9 +259,12 @@ func runTask(
 	fmt.Fprintf(os.Stderr, "mode: %s\n", task.ExecutionPolicy)
 
 	agentCfg := agent.Config{
-		Model:   cfg.AgentModel,
-		MaxIter: 100,
-		Debug:   debug,
+		PlannerModel:    cfg.PlannerModel,
+		CoderModel:      cfg.CoderModel,
+		ToolCallerModel: cfg.ToolCallerModel,
+		CompactorModel:  cfg.CompactorModel,
+		MaxIter:         100,
+		Debug:           debug,
 	}
 	preApproved := confirm.ParseAllowedTools(allowedTools)
 	interactive := task.ExecutionPolicy != compiler.PolicyAutonomous && !yesOverride
