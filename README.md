@@ -55,20 +55,70 @@ All model calls are routed through [Costguard](https://github.com/your-org/costg
 
 ## Installation
 
+### 1. Clone and configure
+
 ```bash
 git clone https://github.com/marcoantonios1/Forge
 cd Forge
-make build
-# binary is at ./bin/forge
-```
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill in your values:
-
-```bash
 cp .env.example .env
 ```
+
+Open `.env` and fill in your values (see [Configuration](#configuration) below).
+
+### 2. Add environment variables to your shell
+
+Open your shell config:
+
+```bash
+nano ~/.zshrc
+```
+
+Copy each `KEY=value` line from `.env` and paste them at the bottom of `~/.zshrc`. Then reload and verify:
+
+```bash
+source ~/.zshrc
+echo $COSTGUARD_URL   # should print your Costguard URL
+```
+
+### 3. Build and install the binary
+
+```bash
+cd ~/Documents/Forge
+go build -o bin/forge ./cmd/forge
+sudo cp bin/forge /usr/local/bin/forge
+```
+
+`forge` is now available globally:
+
+```bash
+cd ~/some-other-project
+forge
+```
+
+### Uninstall
+
+Remove the binary:
+
+```bash
+sudo rm /usr/local/bin/forge
+```
+
+Clean the build output:
+
+```bash
+cd ~/Documents/Forge
+make clean
+```
+
+Remove the environment variables you added from `~/.zshrc`:
+
+```bash
+nano ~/.zshrc
+```
+
+---
+
+## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
