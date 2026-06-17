@@ -23,14 +23,53 @@ const (
 	defaultStuckAfter = 3 // minimum iterations before stuck check fires
 )
 
+type ModelRole string
+
+const (
+	RolePlanner    ModelRole = "planner"
+	RoleCoder      ModelRole = "coder"
+	RoleToolCaller ModelRole = "tool_caller"
+	RoleCompactor  ModelRole = "compactor"
+)
+
 type Config struct {
-	Model                string
+	PlannerModel         string
+	CoderModel           string
+	ToolCallerModel      string // empty = disabled, planner emits TOOL:/ARGS: directly
+	CompactorModel       string
+	EmbeddingModel       string
 	MaxIter              int
 	AutoApply            bool
 	Debug                bool
 	StuckAfterIterations int // minimum iterations before stuck check; default 3
 	// TODO: expose stuck-window sizes (tool call/result/response history
 	// lengths) as additional Config fields for fine-grained tuning.
+}
+
+// selectModel returns the model string for the given role, falling back to
+// PlannerModel for any role left unconfigured. ToolCaller has no fallback
+// value returned here — callers must check ToolCallerEnabled() first.
+func (c Config) selectModel(role ModelRole) string {
+	switch role {
+	case RoleCoder:
+		if c.CoderModel != "" {
+			return c.CoderModel
+		}
+	case RoleToolCaller:
+		if c.ToolCallerModel != "" {
+			return c.ToolCallerModel
+		}
+	case RoleCompactor:
+		if c.CompactorModel != "" {
+			return c.CompactorModel
+		}
+	}
+	return c.PlannerModel
+}
+
+// ToolCallerEnabled reports whether a distinct tool-caller model is configured.
+func (c Config) ToolCallerEnabled() bool {
+	return strings.TrimSpace(c.ToolCallerModel) != ""
 }
 
 // PatchConfirmer abstracts user confirmation for patches.
@@ -185,10 +224,13 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 	}
 
 	stuck := newStuckState()
+	useCoderNext := false // set after a code-intent resolves; flipped to RoleCoder on next iteration
 
 	for {
 		// TODO: context window trimming — truncate ac.History when approaching
 		// model token limit (post-MVP).
+		// TODO: wire RoleCompactor into context-window trimming when implemented
+		// (see TODO above about ac.History truncation).
 
 		// Step 2.5 — stuck detection (runs before the Costguard call).
 		if reason := stuck.isStuck(ac.Iteration, a.cfg.StuckAfterIterations); reason != "" {
@@ -206,14 +248,18 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 			return fmt.Errorf("agent: %s", stuckMsg)
 		}
 
-		if a.cfg.Debug {
-			fmt.Fprintf(os.Stderr, "[agent] iteration %d/%d\n", ac.Iteration+1, a.cfg.MaxIter)
-		}
-
 		messages := append(baseMessages, ac.History...)
 
+		plannerRole := RolePlanner
+		if useCoderNext {
+			plannerRole = RoleCoder
+			useCoderNext = false
+		}
+		plannerModel := a.cfg.selectModel(plannerRole)
+		a.logCall(ac, plannerRole, plannerModel)
+
 		resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-			Model:    a.cfg.Model,
+			Model:    plannerModel,
 			Messages: messages,
 		})
 		if err != nil {
@@ -226,6 +272,36 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		response := strings.TrimSpace(resp.Choices[0].Message.Content)
 		ac.History = append(ac.History, costguard.Message{Role: "assistant", Content: response})
 		stuck.recordResponse(response)
+
+		// If the planner emitted an intent and the tool caller is enabled,
+		// resolve it into a TOOL:/ARGS: call via a second Costguard round trip.
+		if strings.HasPrefix(response, "INTENT:") {
+			intent := strings.TrimSpace(strings.TrimPrefix(response, "INTENT:"))
+			if a.cfg.ToolCallerEnabled() {
+				resolved, tcErr := a.resolveIntent(ctx, ac, intent)
+				if tcErr != nil {
+					// Tool-caller failure is non-fatal — feed it back to the planner.
+					// TODO: tool-caller failures could fall back to direct TOOL:/ARGS:
+					// emission within the same iteration rather than costing a full
+					// extra loop iteration.
+					ac.History = append(ac.History, userMsg(
+						"Tool caller error: "+tcErr.Error()+". Try restating your intent or emit TOOL:/ARGS: directly."))
+					if err := a.advanceIteration(ac); err != nil {
+						return err
+					}
+					continue
+				}
+				// TODO: replace intentSuggestsCode heuristic with an explicit signal
+				// from the planner (e.g. "INTENT_TYPE: code" vs "INTENT_TYPE: read")
+				// rather than substring matching.
+				useCoderNext = intentSuggestsCode(intent)
+				response = resolved
+				ac.History = append(ac.History, costguard.Message{Role: "assistant", Content: response})
+			}
+			// If tool caller is disabled, INTENT: is unrecognised — falls through to
+			// the default branch below, which re-prompts the planner to emit TOOL:/ARGS:
+			// directly, preserving single-model backwards compatibility.
+		}
 
 		// Step 3 — parse response.
 		switch {
@@ -284,20 +360,8 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		}
 
 		// Step 4 — backstop iteration limit (stuck detector fires first in practice).
-		ac.Iteration++
-		if ac.Iteration >= a.cfg.MaxIter {
-			backstopMsg := fmt.Sprintf("task exceeded maximum iterations (%d)", a.cfg.MaxIter)
-			a.emitter.Emit(events.Event{
-				Type:      events.EventTaskFailed,
-				Timestamp: time.Now(),
-				SessionID: ac.SessionID,
-				Payload: map[string]any{
-					"session_id": ac.SessionID,
-					"reason":     backstopMsg,
-					"iterations": ac.Iteration,
-				},
-			})
-			return fmt.Errorf("agent: %s", backstopMsg)
+		if err := a.advanceIteration(ac); err != nil {
+			return err
 		}
 	}
 }
@@ -424,8 +488,10 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 	}
 
 	// One-shot LLM call to check for FORGE_CLARIFY.
+	plannerModel := a.cfg.selectModel(RolePlanner)
+	a.logCall(ac, RolePlanner, plannerModel)
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-		Model: a.cfg.Model,
+		Model: plannerModel,
 		Messages: []costguard.Message{
 			SystemMessage(ac.ProjectConfig),
 			TaskMessage(ac.Task),
@@ -530,6 +596,76 @@ func (a *Agent) prepareRepo(ctx context.Context, ac *AgentContext) {
 
 func userMsg(content string) costguard.Message {
 	return costguard.Message{Role: "user", Content: content}
+}
+
+func (a *Agent) logCall(ac *AgentContext, role ModelRole, model string) {
+	if !a.cfg.Debug {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[agent] iteration %d/%d  [%s]  model=%s\n",
+		ac.Iteration+1, a.cfg.MaxIter, role, model)
+}
+
+func (a *Agent) advanceIteration(ac *AgentContext) error {
+	ac.Iteration++
+	if ac.Iteration >= a.cfg.MaxIter {
+		backstopMsg := fmt.Sprintf("task exceeded maximum iterations (%d)", a.cfg.MaxIter)
+		a.emitter.Emit(events.Event{
+			Type:      events.EventTaskFailed,
+			Timestamp: time.Now(),
+			SessionID: ac.SessionID,
+			Payload: map[string]any{
+				"session_id": ac.SessionID,
+				"reason":     backstopMsg,
+				"iterations": ac.Iteration,
+			},
+		})
+		return fmt.Errorf("agent: %s", backstopMsg)
+	}
+	return nil
+}
+
+// resolveIntent asks the tool-caller model to convert a planner's natural-language
+// intent into a valid TOOL:/ARGS: call. Returns the raw tool-caller response
+// (expected to start with "TOOL:") or an error if the call fails or the response
+// doesn't look like a tool call.
+func (a *Agent) resolveIntent(ctx context.Context, ac *AgentContext, intent string) (string, error) {
+	toolCallerModel := a.cfg.selectModel(RoleToolCaller)
+	a.logCall(ac, RoleToolCaller, toolCallerModel)
+
+	req := costguard.ChatRequest{
+		Model: toolCallerModel,
+		Messages: []costguard.Message{
+			{Role: "system", Content: toolCallerSystemPrompt},
+			{Role: "user", Content: fmt.Sprintf(
+				"Convert this intent into a tool call: %s\n\nAvailable tools:\n%s",
+				intent, availableToolsList)},
+		},
+	}
+	resp, err := a.client.Chat(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("tool caller: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return "", errors.New("tool caller: empty response")
+	}
+	out := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if !strings.Contains(out, "TOOL:") {
+		return "", fmt.Errorf("tool caller: response did not contain a TOOL: call: %q", out)
+	}
+	return out, nil
+}
+
+// intentSuggestsCode returns true if the lowercased intent contains a keyword
+// suggesting a code-modification operation.
+func intentSuggestsCode(intent string) bool {
+	lower := strings.ToLower(intent)
+	for _, kw := range []string{"patch", "write", "fix", "implement", "create", "modify"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 var _ = tools.IsRecoverable

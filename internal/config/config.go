@@ -18,8 +18,14 @@ type Config struct {
 	Timeout           time.Duration
 	MaxRetries        int
 	Debug             bool
-	CompilerModel     string
-	AgentModel        string
+	CompilerModel   string
+	PlannerModel    string
+	CoderModel      string
+	ToolCallerModel string // empty = tool-caller disabled, planner emits TOOL:/ARGS: directly
+	CompactorModel  string
+	EmbeddingModel  string
+	// TODO: EmbeddingModel is configured but not yet consumed — wire into the
+	// semantic search / embedding pipeline ticket when implemented.
 }
 
 // loadDotEnv reads .env from the current directory and sets any variables
@@ -61,8 +67,12 @@ func Load() (*Config, error) {
 		CostguardAgent: "forge",
 		Timeout:        60 * time.Second,
 		MaxRetries:     3,
-		CompilerModel:  "claude-sonnet-4-6",
-		AgentModel:     "claude-sonnet-4-6",
+		CompilerModel:   "claude-sonnet-4-6",
+		PlannerModel:    "claude-sonnet-4-6",
+		CoderModel:      "claude-sonnet-4-6",
+		ToolCallerModel: "", // unset by default — backwards-compatible direct-call path
+		CompactorModel:  "claude-sonnet-4-6",
+		EmbeddingModel:  "",
 	}
 
 	if v := os.Getenv("COSTGUARD_URL"); v != "" {
@@ -90,8 +100,32 @@ func Load() (*Config, error) {
 	if v := os.Getenv("FORGE_COMPILER_MODEL"); v != "" {
 		cfg.CompilerModel = v
 	}
-	if v := os.Getenv("FORGE_AGENT_MODEL"); v != "" {
-		cfg.AgentModel = v
+	if v := os.Getenv("FORGE_PLANNER_MODEL"); v != "" {
+		cfg.PlannerModel = v
+	}
+	if v := os.Getenv("FORGE_CODER_MODEL"); v != "" {
+		cfg.CoderModel = v
+	}
+	if v := os.Getenv("FORGE_TOOL_CALLER_MODEL"); v != "" {
+		cfg.ToolCallerModel = v
+	}
+	if v := os.Getenv("FORGE_COMPACTOR_MODEL"); v != "" {
+		cfg.CompactorModel = v
+	}
+	if v := os.Getenv("FORGE_EMBEDDING_MODEL"); v != "" {
+		cfg.EmbeddingModel = v
+	}
+	// Fallback: PlannerModel, CoderModel, CompactorModel fall back to CompilerModel
+	// if left empty. ToolCallerModel and EmbeddingModel do NOT fall back — empty
+	// means "feature disabled", which is the intended default.
+	if cfg.PlannerModel == "" {
+		cfg.PlannerModel = cfg.CompilerModel
+	}
+	if cfg.CoderModel == "" {
+		cfg.CoderModel = cfg.CompilerModel
+	}
+	if cfg.CompactorModel == "" {
+		cfg.CompactorModel = cfg.CompilerModel
 	}
 	if v := os.Getenv("COSTGUARD_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)

@@ -39,7 +39,20 @@ Available tools and their required arguments:
     ARGS: {"command": "<shell command>", "root": "<repo root>",
            "timeout_seconds": <int, optional, default 30>}
 
-To call a tool, emit exactly:
+When you need to use a tool, do NOT emit TOOL:/ARGS: yourself. Instead, state
+your intent in natural language:
+  INTENT: <one sentence describing what you want to do and why, e.g.
+  "Read the contents of internal/auth/token.go to check the current
+  validation logic">
+
+A separate system will convert your intent into the correct tool call.
+You will then receive the tool result as normal and continue.
+
+Note: if no intent-resolution system is available, you will instead be asked
+to emit TOOL:/ARGS: directly in the same format as before — follow whichever
+instruction you are actually given in a turn.
+
+To call a tool directly (when instructed), emit exactly:
   TOOL: <name>
   ARGS: {"key": "value", ...}
 
@@ -77,6 +90,28 @@ Rules:
   for FORGE_FAILED.`
 
 // Clarification for supervised tasks is handled in agent.clarify() — see agent.go.
+
+const toolCallerSystemPrompt = `You are a tool-call resolver. You receive a
+natural-language intent and a list of available tools with their argument
+schemas. Your only job is to emit exactly one tool call in this format and
+nothing else:
+  TOOL: <tool_name>
+  ARGS: <JSON object matching the tool's argument schema>
+
+Never explain your reasoning. Never emit prose. If the intent is ambiguous,
+make the most reasonable interpretation and still emit a valid tool call.`
+
+const availableToolsList = `
+read_file       ARGS: {"path": "<file path>", "max_lines": <int, optional>}
+list_files      ARGS: {"root": "<dir>", "pattern": "<glob, optional>"}
+search_code     ARGS: {"root": "<dir>", "pattern": "<string>", "regex": <bool, optional>}
+git_status      ARGS: {}
+git_diff        ARGS: {"staged": <bool, optional>}
+git_log         ARGS: {"limit": <int, optional>}
+run_command     ARGS: {"command": "<shell command>", "timeout_seconds": <int, optional>}
+`
+// Keep this list in sync with the tools actually registered in agent.Registry.
+// git_commit and git_push are intentionally omitted — they are not agent-callable.
 
 func SystemMessage(cfg *projectconfig.ProjectConfig) costguard.Message {
 	content := agentSystemPrompt
