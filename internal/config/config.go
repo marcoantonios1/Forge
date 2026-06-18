@@ -27,13 +27,13 @@ type Config struct {
 	Timeout           time.Duration
 	MaxRetries        int
 	Debug             bool
-	CompilerModel   string
-	PlannerModel    string
-	CoderModel      string
-	ToolCallerModel string // empty = tool-caller disabled, planner emits TOOL:/ARGS: directly
-	CompactorModel  string
-	EmbeddingModel  string
-	Limits          ModelLimits
+	CompilerModel     string
+	PlannerModel      string
+	CoderModel        string
+	ToolCallerModel   string // empty = tool-caller disabled, planner emits TOOL:/ARGS: directly
+	CompactorModel    string
+	EmbeddingModel    string
+	Limits            ModelLimits
 }
 
 // loadDotEnv reads .env from the current directory and sets any variables
@@ -70,11 +70,11 @@ func loadDotEnv() {
 func Load() (*Config, error) {
 	loadDotEnv()
 	cfg := &Config{
-		CostguardURL:   "http://localhost:8080",
-		Mode:           "balanced",
-		CostguardAgent: "forge",
-		Timeout:        60 * time.Second,
-		MaxRetries:     3,
+		CostguardURL:    "http://localhost:8080",
+		Mode:            "balanced",
+		CostguardAgent:  "forge",
+		Timeout:         60 * time.Second,
+		MaxRetries:      3,
 		CompilerModel:   "claude-sonnet-4-6",
 		PlannerModel:    "claude-sonnet-4-6",
 		CoderModel:      "claude-sonnet-4-6",
