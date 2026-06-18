@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+type ModelLimits struct {
+	CompilerMaxTokens   int
+	PlannerMaxTokens    int
+	CoderMaxTokens      int
+	ToolCallerMaxTokens int
+	CompactorMaxTokens  int
+	EmbeddingMaxTokens  int
+}
+
 type Config struct {
 	CostguardURL      string
 	Mode              string
@@ -24,8 +33,7 @@ type Config struct {
 	ToolCallerModel string // empty = tool-caller disabled, planner emits TOOL:/ARGS: directly
 	CompactorModel  string
 	EmbeddingModel  string
-	// TODO: EmbeddingModel is configured but not yet consumed — wire into the
-	// semantic search / embedding pipeline ticket when implemented.
+	Limits          ModelLimits
 }
 
 // loadDotEnv reads .env from the current directory and sets any variables
@@ -73,6 +81,14 @@ func Load() (*Config, error) {
 		ToolCallerModel: "", // unset by default — backwards-compatible direct-call path
 		CompactorModel:  "claude-sonnet-4-6",
 		EmbeddingModel:  "",
+		Limits: ModelLimits{
+			CompilerMaxTokens:   8000,
+			PlannerMaxTokens:    32000,
+			CoderMaxTokens:      32000,
+			ToolCallerMaxTokens: 4000,
+			CompactorMaxTokens:  8000,
+			EmbeddingMaxTokens:  8000,
+		},
 	}
 
 	if v := os.Getenv("COSTGUARD_URL"); v != "" {
