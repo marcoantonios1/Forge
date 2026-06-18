@@ -32,18 +32,51 @@ const (
 	RoleCompactor  ModelRole = "compactor"
 )
 
+// ModelLimits mirrors config.ModelLimits. Duplicated here so agent does not
+// import internal/config (consistent with how model names are already passed
+// as plain strings from main.go rather than as a config.Config reference).
+type ModelLimits struct {
+	CompilerMaxTokens   int
+	PlannerMaxTokens    int
+	CoderMaxTokens      int
+	ToolCallerMaxTokens int
+	CompactorMaxTokens  int
+	EmbeddingMaxTokens  int
+}
+
 type Config struct {
 	PlannerModel         string
 	CoderModel           string
 	ToolCallerModel      string // empty = disabled, planner emits TOOL:/ARGS: directly
 	CompactorModel       string
 	EmbeddingModel       string
+	Limits               ModelLimits
 	MaxIter              int
 	AutoApply            bool
 	Debug                bool
 	StuckAfterIterations int // minimum iterations before stuck check; default 3
 	// TODO: expose stuck-window sizes (tool call/result/response history
 	// lengths) as additional Config fields for fine-grained tuning.
+	// TODO: wire CompilerMaxTokens into compiler.Compile() if/when its calls
+	// need budget-aware truncation; currently compiler inputs are short
+	// enough in practice that this has not been needed.
+	// TODO: wire EmbeddingMaxTokens into embeddings.Build()/Search() chunk
+	// sizing (internal/embeddings/chunk.go's maxChunkChars) for closer
+	// alignment between token budget and character-based chunking.
+}
+
+// limitForRole returns the configured token budget for a role.
+func (c Config) limitForRole(role ModelRole) int {
+	switch role {
+	case RoleCoder:
+		return c.Limits.CoderMaxTokens
+	case RoleToolCaller:
+		return c.Limits.ToolCallerMaxTokens
+	case RoleCompactor:
+		return c.Limits.CompactorMaxTokens
+	default:
+		return c.Limits.PlannerMaxTokens
+	}
 }
 
 // selectModel returns the model string for the given role, falling back to

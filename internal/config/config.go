@@ -131,6 +131,36 @@ func Load() (*Config, error) {
 	if v := os.Getenv("FORGE_EMBEDDING_MODEL"); v != "" {
 		cfg.EmbeddingModel = v
 	}
+	if v := os.Getenv("FORGE_COMPILER_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.CompilerMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_PLANNER_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.PlannerMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_CODER_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.CoderMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_TOOL_CALLER_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.ToolCallerMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_COMPACTOR_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.CompactorMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_EMBEDDING_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.EmbeddingMaxTokens = n
+		}
+	}
 	// Fallback: PlannerModel, CoderModel, CompactorModel fall back to CompilerModel
 	// if left empty. ToolCallerModel and EmbeddingModel do NOT fall back — empty
 	// means "feature disabled", which is the intended default.
