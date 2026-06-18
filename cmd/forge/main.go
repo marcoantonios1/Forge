@@ -28,6 +28,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
 	"github.com/marcoantonios1/Forge/internal/forgeinit"
+	"github.com/marcoantonios1/Forge/internal/mode"
 	"github.com/marcoantonios1/Forge/internal/patch"
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 	"github.com/marcoantonios1/Forge/internal/session"
@@ -45,6 +46,7 @@ var (
 	Example: --allowed-tools=read,git_read`)
 	allowMainCommit = flag.Bool("allow-main-commit", false,
 		"allow committing directly to main or master (unsafe)")
+	modeFlag = flag.String("mode", "safe", "execution mode: safe, balanced, or autonomous")
 )
 
 type headlessResult struct {
@@ -54,7 +56,7 @@ type headlessResult struct {
 	Iterations int      `json:"iterations"`
 }
 
-func runHeadless(rawTask, outputFmt string, debug bool) int {
+func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.SessionMode) int {
 	// TODO: add --timeout <duration> flag to cancel ctx after a fixed wall-clock duration.
 
 	// 1. Signal handling — Ctrl+C exits with code 130.
@@ -78,6 +80,14 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 	if debug {
 		debugRenderer := ui.New(os.Stderr, ui.ModeDebug)
 		emitter = events.Multi(renderer, debugRenderer)
+	}
+	auditLogger, auditErr := mode.NewAuditLogger(cwd, sessionID, sessionMode)
+	if auditErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: audit logging disabled: %v\n", auditErr)
+	}
+	defer auditLogger.Close()
+	if sessionMode == mode.ModeAutonomous {
+		emitter = &mode.EmitterTap{Inner: emitter, Audit: auditLogger}
 	}
 
 	// 4. Project config.
@@ -306,6 +316,8 @@ func runTask(
 	embedClient *embeddings.EmbedClient,
 	index *embeddings.Index,
 	mem *memory.Memory,
+	sessionMode mode.SessionMode,
+	emitter events.Emitter,
 ) error {
 	task, err := comp.Compile(ctx, line)
 	if err != nil {
@@ -315,12 +327,13 @@ func runTask(
 	fmt.Fprintf(os.Stderr, "compiled: %s/%s [%s]\n",
 		task.Category, task.Scope, task.ExecutionPolicy)
 
-	confirmer := confirmPolicy(
-		task.ExecutionPolicy, yesOverride,
-		os.Stdin, os.Stderr,
-		ui.IsTTY(os.Stdout),
-		renderer, sessionID,
-	)
+	// autonomous mode always auto-confirms patches, regardless of task.ExecutionPolicy.
+	var confirmer agent.PatchConfirmer
+	if sessionMode.AutoConfirmPatches() || yesOverride || task.ExecutionPolicy == compiler.PolicyAutonomous {
+		confirmer = confirm.AutoConfirmer{}
+	} else {
+		confirmer = confirm.NewSafeConfirmer(os.Stdin, os.Stderr, ui.IsTTY(os.Stdout), emitter, sessionID)
+	}
 	fmt.Fprintf(os.Stderr, "mode: %s\n", task.ExecutionPolicy)
 
 	agentCfg := agent.Config{
@@ -337,29 +350,43 @@ func runTask(
 			EmbeddingMaxTokens:  cfg.Limits.EmbeddingMaxTokens,
 		},
 		MaxIter: 100,
-		Debug:   *debugFlag,
+		Debug:   debug,
 	}
+
+	// Merge --allowed-tools with the session mode's auto-approved categories.
 	preApproved := confirm.ParseAllowedTools(allowedTools)
-	interactive := task.ExecutionPolicy != compiler.PolicyAutonomous && !yesOverride
+	if preApproved == nil {
+		preApproved = map[string]bool{}
+	}
+	for cat := range sessionMode.PreApprovedCategories() {
+		preApproved[cat] = true
+	}
+
+	// interactive: false when --yes, task is autonomous, or session mode is autonomous.
+	interactive := !yesOverride &&
+		task.ExecutionPolicy != compiler.PolicyAutonomous &&
+		sessionMode.Interactive()
+
 	gate := confirm.NewPermissionGate(
 		os.Stdin, os.Stderr,
 		ui.IsTTY(os.Stdout),
 		debug,
-		renderer,
+		emitter,
 		sessionID,
 		preApproved,
 		interactive,
 	)
-	registry := agent.NewRegistry(cwd, renderer, sessionID, gate, embedClient, index)
-	a := agent.New(agentCfg, client, registry, renderer, confirmer, comp, os.Stdin, os.Stderr)
+	registry := agent.NewRegistry(cwd, emitter, sessionID, gate, embedClient, index)
+	a := agent.New(agentCfg, client, registry, emitter, confirmer, comp, os.Stdin, os.Stderr)
 	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory, mem)
 
 	if err := a.Run(ctx, ac); err != nil {
 		return err
 	}
 	if ac.Patches.Len() > 0 {
-		_, auto := confirmer.(confirm.AutoConfirmer)
-		if err := runGitWorkflow(ctx, ac, registry, renderer, auto); err != nil {
+		_, autoConfirmer := confirmer.(confirm.AutoConfirmer)
+		autoGit := autoConfirmer || sessionMode == mode.ModeAutonomous
+		if err := runGitWorkflow(ctx, ac, registry, emitter, autoGit); err != nil {
 			fmt.Fprintf(os.Stderr, "git workflow: %v\n", err)
 		}
 	}
@@ -694,6 +721,8 @@ func runMemoryCommand(args []string) int {
 func main() {
 	flag.Parse()
 
+	sessionMode := mode.Parse(*modeFlag)
+
 	if flag.NArg() > 0 && flag.Arg(0) == "init" {
 		os.Exit(runInit())
 	}
@@ -708,7 +737,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "forge --print: task argument required")
 			os.Exit(2)
 		}
-		os.Exit(runHeadless(task, *outputFlag, *debugFlag))
+		os.Exit(runHeadless(task, *outputFlag, *debugFlag, sessionMode))
 	}
 
 	// 1. Config
@@ -723,12 +752,12 @@ func main() {
 	// 3. Compiler
 	comp := compiler.New(client, cfg.CompilerModel, cfg.Debug)
 
-	// 4. Renderer (is the emitter — never discarded)
-	mode := ui.ModeHuman
+	// 4. Renderer + emitter (emitter wraps renderer; in autonomous mode also taps audit log)
+	uiMode := ui.ModeHuman
 	if *debugFlag {
-		mode = ui.ModeDebug
+		uiMode = ui.ModeDebug
 	}
-	renderer := ui.New(os.Stdout, mode)
+	renderer := ui.New(os.Stdout, uiMode)
 
 	// 5. Working directory — fatal, not a warning
 	cwd, err := os.Getwd()
@@ -781,7 +810,19 @@ func main() {
 
 	// 7. Session
 	id := session.NewID()
-	fmt.Printf("Forge — session %s\n", id)
+
+	// Audit logger (non-nil only in autonomous mode) + emitter tap.
+	auditLogger, auditErr := mode.NewAuditLogger(cwd, id, sessionMode)
+	if auditErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: audit logging disabled: %v\n", auditErr)
+	}
+	defer auditLogger.Close()
+	var emitter events.Emitter = renderer
+	if sessionMode == mode.ModeAutonomous {
+		emitter = &mode.EmitterTap{Inner: renderer, Audit: auditLogger}
+	}
+
+	fmt.Printf("Forge — session %s [%s]\n", id, sessionMode)
 	if projectCfg != nil {
 		fmt.Printf("Loaded forge.md from %s\n", projectCfg.Path)
 	}
@@ -846,7 +887,8 @@ func main() {
 		taskMu.Unlock()
 
 		runErr := runTask(ctx, line, cwd, cfg, client, comp, renderer,
-			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag, embedClient, index, mem)
+			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag, embedClient, index, mem,
+			sessionMode, emitter)
 
 		cancel()
 		taskMu.Lock()
