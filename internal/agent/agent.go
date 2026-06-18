@@ -219,8 +219,13 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 
 	// Seed history with system + task messages.
 	baseMessages := []costguard.Message{
-		SystemMessage(ac.ProjectConfig),
+		SystemMessage(ac.ProjectConfig, ac.Memory),
 		TaskMessage(ac.Task),
+	}
+	if a.cfg.Debug && ac.Memory != nil {
+		if block := ac.Memory.Inject(); block != "" {
+			fmt.Fprintf(os.Stderr, "[memory] injected %d bytes of session history\n", len(block))
+		}
 	}
 
 	stuck := newStuckState()
@@ -493,7 +498,7 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
 		Model: plannerModel,
 		Messages: []costguard.Message{
-			SystemMessage(ac.ProjectConfig),
+			SystemMessage(ac.ProjectConfig, ac.Memory),
 			TaskMessage(ac.Task),
 			{Role: "user", Content: "Should you ask a clarifying question before starting? " +
 				"If yes, emit FORGE_CLARIFY: <one specific question>. " +

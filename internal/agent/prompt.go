@@ -6,6 +6,7 @@ import (
 
 	"github.com/marcoantonios1/Forge/internal/compiler"
 	"github.com/marcoantonios1/Forge/internal/costguard"
+	"github.com/marcoantonios1/Forge/internal/memory"
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 )
 
@@ -123,8 +124,15 @@ run_command       ARGS: {"command": "<shell command>", "timeout_seconds": <int, 
 // Keep this list in sync with the tools actually registered in agent.Registry.
 // git_commit and git_push are intentionally omitted — they are not agent-callable.
 
-func SystemMessage(cfg *projectconfig.ProjectConfig) costguard.Message {
+// SystemMessage builds the system message with forge.md first (highest precedence),
+// memory second (inferred context), and the base agent prompt last.
+func SystemMessage(cfg *projectconfig.ProjectConfig, mem *memory.Memory) costguard.Message {
 	content := agentSystemPrompt
+	if mem != nil {
+		if block := mem.Inject(); block != "" {
+			content = block + "\n\n" + content
+		}
+	}
 	if cfg != nil && !cfg.IsZero() {
 		content = cfg.SystemPromptBlock() + "\n\n" + content
 	}

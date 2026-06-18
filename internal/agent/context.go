@@ -5,6 +5,7 @@ import (
 
 	"github.com/marcoantonios1/Forge/internal/compiler"
 	"github.com/marcoantonios1/Forge/internal/costguard"
+	"github.com/marcoantonios1/Forge/internal/memory"
 	"github.com/marcoantonios1/Forge/internal/patch"
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 )
@@ -14,6 +15,7 @@ type AgentContext struct {
 	Task          *compiler.Task
 	Root          string
 	ProjectConfig *projectconfig.ProjectConfig
+	Memory        *memory.Memory // loaded at session start; nil = memory disabled/unavailable
 	History       []costguard.Message
 	Patches       *patch.PatchHistory
 	Iteration     int
@@ -30,12 +32,14 @@ func NewAgentContext(
 	root string,
 	cfg *projectconfig.ProjectConfig,
 	history *patch.PatchHistory,
+	mem *memory.Memory,
 ) *AgentContext {
 	return &AgentContext{
 		SessionID:     sessionID,
 		Task:          task,
 		Root:          root,
 		ProjectConfig: cfg,
+		Memory:        mem,
 		History:       []costguard.Message{},
 		Patches:       history,
 		StartedAt:     time.Now(),
