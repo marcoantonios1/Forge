@@ -19,7 +19,6 @@ type TaskHistoryEntry struct {
 }
 
 type Memory struct {
-	// TODO: Conventions inference is not yet implemented
 	Version     int                `json:"version"`
 	UpdatedAt   time.Time          `json:"updated_at"`
 	Conventions Conventions        `json:"conventions"`
