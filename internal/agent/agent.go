@@ -32,18 +32,51 @@ const (
 	RoleCompactor  ModelRole = "compactor"
 )
 
+// ModelLimits mirrors config.ModelLimits. Duplicated here so agent does not
+// import internal/config (consistent with how model names are already passed
+// as plain strings from main.go rather than as a config.Config reference).
+type ModelLimits struct {
+	CompilerMaxTokens   int
+	PlannerMaxTokens    int
+	CoderMaxTokens      int
+	ToolCallerMaxTokens int
+	CompactorMaxTokens  int
+	EmbeddingMaxTokens  int
+}
+
 type Config struct {
 	PlannerModel         string
 	CoderModel           string
 	ToolCallerModel      string // empty = disabled, planner emits TOOL:/ARGS: directly
 	CompactorModel       string
 	EmbeddingModel       string
+	Limits               ModelLimits
 	MaxIter              int
 	AutoApply            bool
 	Debug                bool
 	StuckAfterIterations int // minimum iterations before stuck check; default 3
 	// TODO: expose stuck-window sizes (tool call/result/response history
 	// lengths) as additional Config fields for fine-grained tuning.
+	// TODO: wire CompilerMaxTokens into compiler.Compile() if/when its calls
+	// need budget-aware truncation; currently compiler inputs are short
+	// enough in practice that this has not been needed.
+	// TODO: wire EmbeddingMaxTokens into embeddings.Build()/Search() chunk
+	// sizing (internal/embeddings/chunk.go's maxChunkChars) for closer
+	// alignment between token budget and character-based chunking.
+}
+
+// limitForRole returns the configured token budget for a role.
+func (c Config) limitForRole(role ModelRole) int {
+	switch role {
+	case RoleCoder:
+		return c.Limits.CoderMaxTokens
+	case RoleToolCaller:
+		return c.Limits.ToolCallerMaxTokens
+	case RoleCompactor:
+		return c.Limits.CompactorMaxTokens
+	default:
+		return c.Limits.PlannerMaxTokens
+	}
 }
 
 // selectModel returns the model string for the given role, falling back to
@@ -194,6 +227,137 @@ func (s *stuckState) isStuck(iteration, minIter int) string {
 	return ""
 }
 
+// estimateTokens gives a cheap, deterministic token estimate for a slice of
+// messages: total character count divided by 4 (no tokenizer dependency).
+// TODO: replace with a BPE-based estimate for better accuracy when a
+// lightweight tokenizer is available without adding external dependencies.
+func estimateTokens(messages []costguard.Message) int {
+	total := 0
+	for _, m := range messages {
+		total += len(m.Content)
+	}
+	return total / 4
+}
+
+const keepTurns = 10
+
+const compactorSystemPrompt = "Summarize the following conversation history " +
+	"in 2-3 sentences, preserving key decisions and file paths."
+
+// trimHistory checks whether messages for the given role would exceed its
+// token budget. If so, it keeps the last keepTurns entries of ac.History,
+// summarises everything older via the compactor model, and replaces ac.History
+// in place. Returns the rebuilt full message slice ready to send.
+//
+// Never returns an error — compactor failures fall back to a hard truncation
+// with a placeholder summary (logged in debug mode only).
+//
+// TODO: trigger compaction proactively at 80% of budget rather than only when
+// already over limit, to avoid last-second compaction on very long sessions.
+func (a *Agent) trimHistory(
+	ctx context.Context,
+	ac *AgentContext,
+	baseMessages []costguard.Message,
+	role ModelRole,
+) []costguard.Message {
+	limit := a.cfg.limitForRole(role)
+	messages := append(append([]costguard.Message{}, baseMessages...), ac.History...)
+
+	estimated := estimateTokens(messages)
+	if a.cfg.Debug {
+		fmt.Fprintf(os.Stderr, "[context] %s: ~%d / %d tokens\n", role, estimated, limit)
+	}
+	if estimated <= limit {
+		return messages
+	}
+
+	if len(ac.History) <= keepTurns {
+		// Nothing meaningful to trim — return as-is. The model may reject the
+		// payload but we cannot reduce further without dropping base messages.
+		return messages
+	}
+
+	toSummarize := ac.History[:len(ac.History)-keepTurns]
+	kept := ac.History[len(ac.History)-keepTurns:]
+
+	summary := a.summarizeHistory(ctx, ac, toSummarize)
+
+	newHistory := make([]costguard.Message, 0, len(kept)+1)
+	newHistory = append(newHistory, costguard.Message{
+		Role:    "user",
+		Content: "Summary of earlier conversation (older turns were truncated to fit context):\n" + summary,
+	})
+	newHistory = append(newHistory, kept...)
+	ac.History = newHistory
+
+	rebuilt := append(append([]costguard.Message{}, baseMessages...), ac.History...)
+	if a.cfg.Debug {
+		fmt.Fprintf(os.Stderr, "[context] %s: trimmed to ~%d tokens after compaction\n",
+			role, estimateTokens(rebuilt))
+	}
+	return rebuilt
+}
+
+// summarizeHistory asks the compactor model to summarise a slice of history
+// messages. If the slice itself would exceed the compactor's own token budget,
+// it is split into chunks that are each summarised independently.
+//
+// Never returns an error — Costguard failures produce a placeholder string.
+func (a *Agent) summarizeHistory(ctx context.Context, ac *AgentContext, history []costguard.Message) string {
+	compactorModel := a.cfg.selectModel(RoleCompactor)
+	compactorLimit := a.cfg.limitForRole(RoleCompactor)
+
+	chunks := chunkMessages(history, compactorLimit)
+	summaries := make([]string, 0, len(chunks))
+	for i, chunk := range chunks {
+		a.logCall(ac, RoleCompactor, compactorModel)
+		resp, err := a.client.Chat(ctx, costguard.ChatRequest{
+			Model: compactorModel,
+			Messages: append([]costguard.Message{
+				{Role: "system", Content: compactorSystemPrompt},
+			}, chunk...),
+		})
+		if err != nil || len(resp.Choices) == 0 {
+			if a.cfg.Debug {
+				fmt.Fprintf(os.Stderr, "[context] compactor chunk %d/%d failed: %v\n", i+1, len(chunks), err)
+			}
+			summaries = append(summaries, fmt.Sprintf("[chunk %d/%d: summary unavailable]", i+1, len(chunks)))
+			continue
+		}
+		summaries = append(summaries, strings.TrimSpace(resp.Choices[0].Message.Content))
+	}
+	return strings.Join(summaries, " ")
+}
+
+// chunkMessages splits history into groups whose estimated token count stays
+// under limit (with 25% headroom reserved for the system prompt). A single
+// message that alone exceeds the budget forms its own chunk rather than being
+// dropped or truncated.
+func chunkMessages(history []costguard.Message, limit int) [][]costguard.Message {
+	if len(history) == 0 {
+		return nil
+	}
+	budget := limit * 3 / 4
+	var chunks [][]costguard.Message
+	var current []costguard.Message
+	currentTokens := 0
+
+	for _, m := range history {
+		msgTokens := len(m.Content) / 4
+		if currentTokens+msgTokens > budget && len(current) > 0 {
+			chunks = append(chunks, current)
+			current = nil
+			currentTokens = 0
+		}
+		current = append(current, m)
+		currentTokens += msgTokens
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, current)
+	}
+	return chunks
+}
+
 func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 	// Step 0 — emit task.started.
 	taskJSON, _ := json.Marshal(ac.Task)
@@ -253,13 +417,12 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 			return fmt.Errorf("agent: %s", stuckMsg)
 		}
 
-		messages := append(baseMessages, ac.History...)
-
 		plannerRole := RolePlanner
 		if useCoderNext {
 			plannerRole = RoleCoder
 			useCoderNext = false
 		}
+		messages := a.trimHistory(ctx, ac, baseMessages, plannerRole)
 		plannerModel := a.cfg.selectModel(plannerRole)
 		a.logCall(ac, plannerRole, plannerModel)
 
@@ -459,8 +622,13 @@ func (a *Agent) gatherGitContext(ctx context.Context, ac *AgentContext) {
 		return string(b)
 	}
 
+	const maxGitDiffBytes = 8 * 1024
+
 	status := runGit("git_status", map[string]any{})
 	diff := runGit("git_diff", map[string]any{})
+	if len(diff) > maxGitDiffBytes {
+		diff = diff[:maxGitDiffBytes] + "\n... diff truncated at 8KB for context budget ..."
+	}
 	log := runGit("git_log", map[string]any{"limit": 10})
 
 	if status != "" || diff != "" || log != "" {
@@ -495,15 +663,20 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 	// One-shot LLM call to check for FORGE_CLARIFY.
 	plannerModel := a.cfg.selectModel(RolePlanner)
 	a.logCall(ac, RolePlanner, plannerModel)
+	clarifyMsgs := []costguard.Message{
+		SystemMessage(ac.ProjectConfig, ac.Memory),
+		TaskMessage(ac.Task),
+		{Role: "user", Content: "Should you ask a clarifying question before starting? " +
+			"If yes, emit FORGE_CLARIFY: <one specific question>. " +
+			"If the task is clear enough to proceed, emit FORGE_DONE: ready."},
+	}
+	if a.cfg.Debug {
+		fmt.Fprintf(os.Stderr, "[context] planner: ~%d / %d tokens\n",
+			estimateTokens(clarifyMsgs), a.cfg.limitForRole(RolePlanner))
+	}
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-		Model: plannerModel,
-		Messages: []costguard.Message{
-			SystemMessage(ac.ProjectConfig, ac.Memory),
-			TaskMessage(ac.Task),
-			{Role: "user", Content: "Should you ask a clarifying question before starting? " +
-				"If yes, emit FORGE_CLARIFY: <one specific question>. " +
-				"If the task is clear enough to proceed, emit FORGE_DONE: ready."},
-		},
+		Model:    plannerModel,
+		Messages: clarifyMsgs,
 	})
 	if err != nil || len(resp.Choices) == 0 {
 		return ac.Task
@@ -646,6 +819,10 @@ func (a *Agent) resolveIntent(ctx context.Context, ac *AgentContext, intent stri
 				"Convert this intent into a tool call: %s\n\nAvailable tools:\n%s",
 				intent, availableToolsList)},
 		},
+	}
+	if a.cfg.Debug {
+		fmt.Fprintf(os.Stderr, "[context] tool_caller: ~%d / %d tokens\n",
+			estimateTokens(req.Messages), a.cfg.limitForRole(RoleToolCaller))
 	}
 	resp, err := a.client.Chat(ctx, req)
 	if err != nil {

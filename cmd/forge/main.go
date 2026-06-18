@@ -152,9 +152,17 @@ func runHeadless(rawTask, outputFmt string, debug bool) int {
 		CoderModel:      appCfg.CoderModel,
 		ToolCallerModel: appCfg.ToolCallerModel,
 		CompactorModel:  appCfg.CompactorModel,
-		MaxIter:         100,
-		AutoApply:       true,
-		Debug:           debug,
+		Limits: agent.ModelLimits{
+			CompilerMaxTokens:   appCfg.Limits.CompilerMaxTokens,
+			PlannerMaxTokens:    appCfg.Limits.PlannerMaxTokens,
+			CoderMaxTokens:      appCfg.Limits.CoderMaxTokens,
+			ToolCallerMaxTokens: appCfg.Limits.ToolCallerMaxTokens,
+			CompactorMaxTokens:  appCfg.Limits.CompactorMaxTokens,
+			EmbeddingMaxTokens:  appCfg.Limits.EmbeddingMaxTokens,
+		},
+		MaxIter:   100,
+		AutoApply: true,
+		Debug:     debug,
 	}
 	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer, nil, nil, nil)
 
@@ -320,8 +328,16 @@ func runTask(
 		CoderModel:      cfg.CoderModel,
 		ToolCallerModel: cfg.ToolCallerModel,
 		CompactorModel:  cfg.CompactorModel,
-		MaxIter:         100,
-		Debug:           debug,
+		Limits: agent.ModelLimits{
+			CompilerMaxTokens:   cfg.Limits.CompilerMaxTokens,
+			PlannerMaxTokens:    cfg.Limits.PlannerMaxTokens,
+			CoderMaxTokens:      cfg.Limits.CoderMaxTokens,
+			ToolCallerMaxTokens: cfg.Limits.ToolCallerMaxTokens,
+			CompactorMaxTokens:  cfg.Limits.CompactorMaxTokens,
+			EmbeddingMaxTokens:  cfg.Limits.EmbeddingMaxTokens,
+		},
+		MaxIter: 100,
+		Debug:   *debugFlag,
 	}
 	preApproved := confirm.ParseAllowedTools(allowedTools)
 	interactive := task.ExecutionPolicy != compiler.PolicyAutonomous && !yesOverride

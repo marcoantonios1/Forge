@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+type ModelLimits struct {
+	CompilerMaxTokens   int
+	PlannerMaxTokens    int
+	CoderMaxTokens      int
+	ToolCallerMaxTokens int
+	CompactorMaxTokens  int
+	EmbeddingMaxTokens  int
+}
+
 type Config struct {
 	CostguardURL      string
 	Mode              string
@@ -18,14 +27,13 @@ type Config struct {
 	Timeout           time.Duration
 	MaxRetries        int
 	Debug             bool
-	CompilerModel   string
-	PlannerModel    string
-	CoderModel      string
-	ToolCallerModel string // empty = tool-caller disabled, planner emits TOOL:/ARGS: directly
-	CompactorModel  string
-	EmbeddingModel  string
-	// TODO: EmbeddingModel is configured but not yet consumed — wire into the
-	// semantic search / embedding pipeline ticket when implemented.
+	CompilerModel     string
+	PlannerModel      string
+	CoderModel        string
+	ToolCallerModel   string // empty = tool-caller disabled, planner emits TOOL:/ARGS: directly
+	CompactorModel    string
+	EmbeddingModel    string
+	Limits            ModelLimits
 }
 
 // loadDotEnv reads .env from the current directory and sets any variables
@@ -62,17 +70,25 @@ func loadDotEnv() {
 func Load() (*Config, error) {
 	loadDotEnv()
 	cfg := &Config{
-		CostguardURL:   "http://localhost:8080",
-		Mode:           "balanced",
-		CostguardAgent: "forge",
-		Timeout:        60 * time.Second,
-		MaxRetries:     3,
+		CostguardURL:    "http://localhost:8080",
+		Mode:            "balanced",
+		CostguardAgent:  "forge",
+		Timeout:         60 * time.Second,
+		MaxRetries:      3,
 		CompilerModel:   "claude-sonnet-4-6",
 		PlannerModel:    "claude-sonnet-4-6",
 		CoderModel:      "claude-sonnet-4-6",
 		ToolCallerModel: "", // unset by default — backwards-compatible direct-call path
 		CompactorModel:  "claude-sonnet-4-6",
 		EmbeddingModel:  "",
+		Limits: ModelLimits{
+			CompilerMaxTokens:   8000,
+			PlannerMaxTokens:    32000,
+			CoderMaxTokens:      32000,
+			ToolCallerMaxTokens: 4000,
+			CompactorMaxTokens:  8000,
+			EmbeddingMaxTokens:  8000,
+		},
 	}
 
 	if v := os.Getenv("COSTGUARD_URL"); v != "" {
@@ -114,6 +130,36 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("FORGE_EMBEDDING_MODEL"); v != "" {
 		cfg.EmbeddingModel = v
+	}
+	if v := os.Getenv("FORGE_COMPILER_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.CompilerMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_PLANNER_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.PlannerMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_CODER_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.CoderMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_TOOL_CALLER_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.ToolCallerMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_COMPACTOR_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.CompactorMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_EMBEDDING_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.EmbeddingMaxTokens = n
+		}
 	}
 	// Fallback: PlannerModel, CoderModel, CompactorModel fall back to CompilerModel
 	// if left empty. ToolCallerModel and EmbeddingModel do NOT fall back — empty
