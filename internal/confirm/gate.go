@@ -21,7 +21,7 @@ var ErrPermissionDenied = errors.New("permission denied by user")
 var toolCategory = map[string]string{
 	"read_file":       "read",
 	"list_files":      "read",
-	"write_file":      "patch",
+	"write_file":      "patch", // intercepted upstream in agent.go before Dispatch; this entry is a safety-net only
 	"search_code":     "read",
 	"semantic_search": "read",
 	"git_status":  "git_read",
