@@ -164,3 +164,10 @@ func GitContextMessage(status, diff, log string) costguard.Message {
 		Content: "Repository state at task start:\n" + status + "\n\n" + diff + "\n\n" + log,
 	}
 }
+
+func RepoSummaryMessage(summary string) costguard.Message {
+	return costguard.Message{
+		Role:    "user",
+		Content: "Repo structure summary (generated at task start):\n" + summary,
+	}
+}
