@@ -45,7 +45,7 @@ Confirmer          — shows a diff preview and prompts before any file is writt
 Git Workflow       — branches off main if needed, commits, and pushes the result
 ```
 
-All model calls are routed through [Costguard](https://github.com/your-org/costguard), an OpenAI-compatible proxy that handles routing, budget enforcement, and cost tracking. No provider is contacted directly.
+All model calls are routed through [Costguard](https://github.com/marcoantonios1/costguard), an OpenAI-compatible proxy that handles routing, budget enforcement, and cost tracking. No provider is contacted directly.
 
 ## Requirements
 
@@ -55,66 +55,11 @@ All model calls are routed through [Costguard](https://github.com/your-org/costg
 
 ## Installation
 
-### 1. Clone and configure
+See the setup guide for your OS:
 
-```bash
-git clone https://github.com/marcoantonios1/Forge
-cd Forge
-cp .env.example .env
-```
-
-Open `.env` and fill in your values (see [Configuration](#configuration) below).
-
-### 2. Add environment variables to your shell
-
-Open your shell config:
-
-```bash
-nano ~/.zshrc
-```
-
-Copy each `KEY=value` line from `.env` and paste them at the bottom of `~/.zshrc`. Then reload and verify:
-
-```bash
-source ~/.zshrc
-echo $COSTGUARD_URL   # should print your Costguard URL
-```
-
-### 3. Build and install the binary
-
-```bash
-cd ~/Documents/Forge
-go build -o bin/forge ./cmd/forge
-sudo cp bin/forge /usr/local/bin/forge
-```
-
-`forge` is now available globally:
-
-```bash
-cd ~/some-other-project
-forge
-```
-
-### Uninstall
-
-Remove the binary:
-
-```bash
-sudo rm /usr/local/bin/forge
-```
-
-Clean the build output:
-
-```bash
-cd ~/Documents/Forge
-make clean
-```
-
-Remove the environment variables you added from `~/.zshrc`:
-
-```bash
-nano ~/.zshrc
-```
+- [macOS](docs/setup-mac.md)
+- [Linux](docs/setup-linux.md)
+- [Windows](docs/setup-windows.md)
 
 ---
 
