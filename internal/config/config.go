@@ -20,6 +20,10 @@ type ModelLimits struct {
 	// ContextTokens are the compaction thresholds — if the estimated input
 	// token count exceeds this, older history is summarised before the call.
 	// Each falls back to the corresponding MaxTokens value if unset (0).
+	// CompilerContextTokens is the base fallback: when a role-specific
+	// ContextTokens and its MaxTokens are both unset, this is used instead,
+	// mirroring how CompilerMaxTokens is the base model fallback.
+	CompilerContextTokens   int
 	PlannerContextTokens    int
 	CoderContextTokens      int
 	ToolCallerContextTokens int
@@ -188,6 +192,9 @@ func Load() (*Config, error) {
 		}
 		return fallback
 	}
+	// CompilerContextTokens is resolved first so it can serve as the base
+	// fallback for all other roles, mirroring how CompilerMaxTokens is used.
+	cfg.Limits.CompilerContextTokens   = parseContextTokens("FORGE_COMPILER_CONTEXT_TOKENS", cfg.Limits.CompilerMaxTokens)
 	cfg.Limits.PlannerContextTokens    = parseContextTokens("FORGE_PLANNER_CONTEXT_TOKENS", cfg.Limits.PlannerMaxTokens)
 	cfg.Limits.CoderContextTokens      = parseContextTokens("FORGE_CODER_CONTEXT_TOKENS", cfg.Limits.CoderMaxTokens)
 	cfg.Limits.ToolCallerContextTokens = parseContextTokens("FORGE_TOOL_CALLER_CONTEXT_TOKENS", cfg.Limits.ToolCallerMaxTokens)

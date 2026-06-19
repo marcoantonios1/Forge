@@ -48,7 +48,10 @@ type ModelLimits struct {
 	EmbeddingMaxTokens  int
 
 	// ContextTokens are the compaction thresholds. Each falls back to the
-	// corresponding MaxTokens value when unset (0).
+	// corresponding MaxTokens value when unset (0). CompilerContextTokens is
+	// the base fallback used when both a role's ContextTokens and MaxTokens
+	// would otherwise resolve to the compiler default.
+	CompilerContextTokens   int
 	PlannerContextTokens    int
 	CoderContextTokens      int
 	ToolCallerContextTokens int
@@ -99,27 +102,43 @@ func (c Config) limitForRole(role ModelRole) int {
 // estimated input token count exceeds this, older history is summarised before
 // the call. Falls back to limitForRole when no separate context limit is set.
 func (c Config) contextLimitForRole(role ModelRole) int {
+	base := c.Limits.CompilerContextTokens
+	if base == 0 {
+		base = c.Limits.CompilerMaxTokens
+	}
 	switch role {
 	case RoleCoder:
 		if c.Limits.CoderContextTokens > 0 {
 			return c.Limits.CoderContextTokens
 		}
-		return c.Limits.CoderMaxTokens
+		if c.Limits.CoderMaxTokens > 0 {
+			return c.Limits.CoderMaxTokens
+		}
+		return base
 	case RoleToolCaller:
 		if c.Limits.ToolCallerContextTokens > 0 {
 			return c.Limits.ToolCallerContextTokens
 		}
-		return c.Limits.ToolCallerMaxTokens
+		if c.Limits.ToolCallerMaxTokens > 0 {
+			return c.Limits.ToolCallerMaxTokens
+		}
+		return base
 	case RoleCompactor:
 		if c.Limits.CompactorContextTokens > 0 {
 			return c.Limits.CompactorContextTokens
 		}
-		return c.Limits.CompactorMaxTokens
+		if c.Limits.CompactorMaxTokens > 0 {
+			return c.Limits.CompactorMaxTokens
+		}
+		return base
 	default: // planner and anything else
 		if c.Limits.PlannerContextTokens > 0 {
 			return c.Limits.PlannerContextTokens
 		}
-		return c.Limits.PlannerMaxTokens
+		if c.Limits.PlannerMaxTokens > 0 {
+			return c.Limits.PlannerMaxTokens
+		}
+		return base
 	}
 }
 
