@@ -44,8 +44,9 @@ type ModelLimits struct {
 	CoderMaxTokens      int
 	ToolCallerMaxTokens int
 	CompactorMaxTokens  int
-	ReviewerMaxTokens   int
-	EmbeddingMaxTokens  int
+	ReviewerMaxTokens     int
+	ReviewerContextTokens int
+	EmbeddingMaxTokens    int
 
 	// ContextTokens are the compaction thresholds. Each falls back to the
 	// corresponding MaxTokens value when unset (0). CompilerContextTokens is
@@ -820,6 +821,35 @@ func (a *Agent) reviewPatch(ctx context.Context, ac *AgentContext, diffText stri
 	}
 
 	taskJSON, _ := json.MarshalIndent(ac.Task, "", "  ")
+
+	// Truncate diff and forge.md to fit the reviewer's context budget.
+	// Use the same ÷4 character approximation as estimateTokens() elsewhere.
+	// Reserve 25% for task JSON + system prompt overhead; give the remaining
+	// 75% to forge.md + diff, with diff taking priority — truncate forge.md
+	// first if the combined size exceeds the available budget.
+	contextBudget := a.cfg.Limits.ReviewerContextTokens
+	if contextBudget <= 0 {
+		contextBudget = 32000
+	}
+	charBudget := contextBudget * 4
+	overhead := charBudget / 4 // 25% reserved for task JSON + system prompt
+	available := charBudget - overhead - len(taskJSON)
+	if available < 0 {
+		available = 0
+	}
+	diffBudget := (available * 3) / 4 // diff gets 75% of what remains
+	convBudget := available - diffBudget
+
+	if len(conventions) > convBudget {
+		conventions = conventions[:convBudget] + "\n... forge.md truncated to fit reviewer context budget ..."
+	}
+	if len(diffText) > diffBudget {
+		if a.cfg.Debug {
+			fmt.Fprintf(os.Stderr, "[reviewer] diff truncated to fit ~%d token budget\n", contextBudget)
+		}
+		diffText = diffText[:diffBudget] + "\n... diff truncated to fit reviewer context budget ..."
+	}
+
 	userPrompt := fmt.Sprintf(
 		"Task:\n%s\n\nProject conventions (forge.md):\n%s\n\nProposed diff:\n%s",
 		string(taskJSON), conventions, diffText)

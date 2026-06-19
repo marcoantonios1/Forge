@@ -14,8 +14,9 @@ type ModelLimits struct {
 	CoderMaxTokens      int
 	ToolCallerMaxTokens int
 	CompactorMaxTokens  int
-	ReviewerMaxTokens   int
-	EmbeddingMaxTokens  int
+	ReviewerMaxTokens      int
+	ReviewerContextTokens  int
+	EmbeddingMaxTokens     int
 
 	// ContextTokens are the compaction thresholds — if the estimated input
 	// token count exceeds this, older history is summarised before the call.
@@ -100,9 +101,10 @@ func Load() (*Config, error) {
 			PlannerMaxTokens:    32000,
 			CoderMaxTokens:      32000,
 			ToolCallerMaxTokens: 4000,
-			CompactorMaxTokens:  8000,
-			ReviewerMaxTokens:   8000,
-			EmbeddingMaxTokens:  8000,
+			CompactorMaxTokens:    8000,
+			ReviewerMaxTokens:     8000,
+			ReviewerContextTokens: 32000,
+			EmbeddingMaxTokens:    8000,
 		},
 	}
 
@@ -174,6 +176,11 @@ func Load() (*Config, error) {
 	if v := os.Getenv("FORGE_REVIEWER_MAX_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Limits.ReviewerMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_REVIEWER_CONTEXT_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.ReviewerContextTokens = n
 		}
 	}
 	if v := os.Getenv("FORGE_EMBEDDING_MAX_TOKENS"); v != "" {
