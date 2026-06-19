@@ -6,6 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	// Note: Only the last session per repo is kept.
+)
+
+const sessionsDir      = ".forge/sessions"
+const maxHistoryEntries = 20
+	"path/filepath"
+	"sort"
 )
 
 const sessionsDir      = ".forge/sessions"
