@@ -112,6 +112,7 @@ Copy `.env.example` to `.env` and edit as needed. Actual environment variables a
 | `FORGE_TOOL_CALLER_MAX_TOKENS` | `4000` | |
 | `FORGE_EMBEDDING_MAX_TOKENS` | `8000` | |
 | `FORGE_REVIEWER_MAX_TOKENS` | `8000` | Reviewer output is one line; 512 is sufficient in practice |
+| `FORGE_REVIEWER_CONTEXT_TOKENS` | `32000` | Bounds the reviewer's input (task + forge.md + full diff); diff is truncated if it would exceed this |
 
 ### Other
 
