@@ -31,6 +31,7 @@ const (
 	RoleCoder      ModelRole = "coder"
 	RoleToolCaller ModelRole = "tool_caller"
 	RoleCompactor  ModelRole = "compactor"
+	RoleReviewer   ModelRole = "reviewer"
 )
 
 // ModelLimits mirrors config.ModelLimits. Duplicated here so agent does not
@@ -46,16 +47,18 @@ type ModelLimits struct {
 }
 
 type Config struct {
-	PlannerModel         string
-	CoderModel           string
-	ToolCallerModel      string // empty = disabled, planner emits TOOL:/ARGS: directly
-	CompactorModel       string
-	EmbeddingModel       string
-	Limits               ModelLimits
-	MaxIter              int
-	AutoApply            bool
-	Debug                bool
-	StuckAfterIterations int // minimum iterations before stuck check; default 3
+	PlannerModel          string
+	CoderModel            string
+	ToolCallerModel       string // empty = disabled, planner emits TOOL:/ARGS: directly
+	CompactorModel        string
+	ReviewerModel         string // empty string = review disabled (explicit opt-out)
+	ReviewerExplicitlyOff bool   // true when FORGE_REVIEWER_MODEL="" was explicitly set
+	EmbeddingModel        string
+	Limits                ModelLimits
+	MaxIter               int
+	AutoApply             bool
+	Debug                 bool
+	StuckAfterIterations  int // minimum iterations before stuck check; default 3
 	// TODO: expose stuck-window sizes (tool call/result/response history
 	// lengths) as additional Config fields for fine-grained tuning.
 	// TODO: wire CompilerMaxTokens into compiler.Compile() if/when its calls
@@ -75,6 +78,8 @@ func (c Config) limitForRole(role ModelRole) int {
 		return c.Limits.ToolCallerMaxTokens
 	case RoleCompactor:
 		return c.Limits.CompactorMaxTokens
+	case RoleReviewer:
+		return c.Limits.PlannerMaxTokens // reviewer shares the planner's budget
 	default:
 		return c.Limits.PlannerMaxTokens
 	}
