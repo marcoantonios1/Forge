@@ -15,6 +15,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
 	"github.com/marcoantonios1/Forge/internal/patch"
+	"github.com/marcoantonios1/Forge/internal/reposummary"
 	"github.com/marcoantonios1/Forge/internal/tools"
 )
 
@@ -381,11 +382,17 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 	// Step 1b — gather git context (best-effort).
 	a.gatherGitContext(ctx, ac)
 
+	// Step 1c — repo summary for repo-wide/module tasks (skip for file-specific).
+	repoSummary := a.generateRepoSummary(ctx, ac)
+
 	// Seed history with system + task messages.
 	baseMessages := []costguard.Message{
 		SystemMessage(ac.ProjectConfig, ac.Memory),
-		TaskMessage(ac.Task),
 	}
+	if repoSummary != "" {
+		baseMessages = append(baseMessages, RepoSummaryMessage(repoSummary))
+	}
+	baseMessages = append(baseMessages, TaskMessage(ac.Task))
 	if a.cfg.Debug && ac.Memory != nil {
 		if block := ac.Memory.Inject(); block != "" {
 			fmt.Fprintf(os.Stderr, "[memory] injected %d bytes of session history\n", len(block))
@@ -849,6 +856,66 @@ func (a *Agent) resolveIntent(ctx context.Context, ac *AgentContext, intent stri
 		return "", fmt.Errorf("tool caller: response did not contain a TOOL: call: %q", out)
 	}
 	return out, nil
+}
+
+// generateRepoSummary calls reposummary.Generate for repo-wide/module scoped
+// tasks, using list_files (not a second filesystem walk) and the planner model.
+// Returns "" for file-specific tasks or on any failure — never blocks the loop.
+func (a *Agent) generateRepoSummary(ctx context.Context, ac *AgentContext) string {
+	if ac.Task.Scope == compiler.ScopeFileSpecific {
+		return ""
+	}
+
+	fmt.Fprintln(os.Stderr, "Summarizing repo structure...")
+
+	listResult, err := a.registry.DispatchDirect(ctx, ToolCall{
+		Name: "list_files",
+		Args: map[string]any{"root": ac.Root},
+	})
+	if err != nil {
+		return ""
+	}
+	lf, ok := listResult.(*tools.ListFilesResult)
+	if !ok || len(lf.Files) == 0 {
+		return ""
+	}
+
+	var forgeMDBlock string
+	if ac.ProjectConfig != nil && !ac.ProjectConfig.IsZero() {
+		forgeMDBlock = ac.ProjectConfig.Raw
+	}
+
+	model := a.cfg.selectModel(RolePlanner)
+	chat := func(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
+		a.logCall(ac, RolePlanner, model)
+		resp, err := a.client.Chat(ctx, costguard.ChatRequest{
+			Model: model,
+			Messages: []costguard.Message{
+				{Role: "system", Content: systemPrompt},
+				{Role: "user", Content: userPrompt},
+			},
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(resp.Choices) == 0 {
+			return "", fmt.Errorf("empty response")
+		}
+		return strings.TrimSpace(resp.Choices[0].Message.Content), nil
+	}
+
+	summary, fromCache, err := reposummary.Generate(ctx, ac.Root, lf.Files, forgeMDBlock, chat, model)
+	if err != nil && a.cfg.Debug {
+		fmt.Fprintf(os.Stderr, "[reposummary] generation warning: %v\n", err)
+	}
+	if a.cfg.Debug {
+		src := "generated"
+		if fromCache {
+			src = "cached"
+		}
+		fmt.Fprintf(os.Stderr, "[reposummary] (%s) %s\n", src, summary)
+	}
+	return summary
 }
 
 // retryToolCallFormat is called when ParseToolCall fails on a response that
