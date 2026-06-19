@@ -100,6 +100,8 @@ Rules:
 
 // Clarification for supervised tasks is handled in agent.clarify() — see agent.go.
 
+const reviewerSystemPrompt = `You are a code reviewer. Given a task, project conventions, and a proposed diff, determine if the diff correctly and safely accomplishes the task. Check for: logic errors, convention violations, scope creep, and missing edge cases. Respond with REVIEW_OK: <brief note> or REVIEW_REJECT: <specific reason>. Nothing else.`
+
 const toolCallerSystemPrompt = `You are a tool-call resolver. You receive a
 natural-language intent and a list of available tools with their argument
 schemas. Your only job is to emit exactly one tool call in this format and

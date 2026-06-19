@@ -14,6 +14,7 @@ type ModelLimits struct {
 	CoderMaxTokens      int
 	ToolCallerMaxTokens int
 	CompactorMaxTokens  int
+	ReviewerMaxTokens   int
 	EmbeddingMaxTokens  int
 }
 
@@ -32,6 +33,7 @@ type Config struct {
 	CoderModel        string
 	ToolCallerModel   string // empty = tool-caller disabled, planner emits TOOL:/ARGS: directly
 	CompactorModel    string
+	ReviewerModel     string
 	EmbeddingModel    string
 	Limits            ModelLimits
 }
@@ -87,6 +89,7 @@ func Load() (*Config, error) {
 			CoderMaxTokens:      32000,
 			ToolCallerMaxTokens: 4000,
 			CompactorMaxTokens:  8000,
+			ReviewerMaxTokens:   8000,
 			EmbeddingMaxTokens:  8000,
 		},
 	}
@@ -156,6 +159,11 @@ func Load() (*Config, error) {
 			cfg.Limits.CompactorMaxTokens = n
 		}
 	}
+	if v := os.Getenv("FORGE_REVIEWER_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.ReviewerMaxTokens = n
+		}
+	}
 	if v := os.Getenv("FORGE_EMBEDDING_MAX_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Limits.EmbeddingMaxTokens = n
@@ -172,6 +180,14 @@ func Load() (*Config, error) {
 	}
 	if cfg.CompactorModel == "" {
 		cfg.CompactorModel = cfg.CompilerModel
+	}
+	// ReviewerModel: an EXPLICITLY EMPTY FORGE_REVIEWER_MODEL="" disables review
+	// (opt-out for speed). An unset env var falls back to PlannerModel so the
+	// reviewer inherits the strongest model by default.
+	if v, present := os.LookupEnv("FORGE_REVIEWER_MODEL"); present {
+		cfg.ReviewerModel = v // may be "" — that is the explicit opt-out signal
+	} else {
+		cfg.ReviewerModel = cfg.PlannerModel // resolved above, so fallback is correct
 	}
 	if v := os.Getenv("COSTGUARD_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)

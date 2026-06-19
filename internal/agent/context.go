@@ -24,6 +24,7 @@ type AgentContext struct {
 	AppliedBranch      string // branch created for this task (set post-task)
 	AppliedCommit      string // short commit hash (set post-task)
 	ClarificationAsked bool   // true after clarify() runs; prevents a second round
+	ReviewRetries      int    // rejection count for the current patch attempt; reset on success or cap exceeded
 }
 
 func NewAgentContext(

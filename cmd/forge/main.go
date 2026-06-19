@@ -159,16 +159,19 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 	registry := agent.NewRegistry(cwd, emitter, sessionID, nil, embedClient, index) // headless: no permission gate
 	confirmer := confirm.AutoConfirmer{}                                             // always — no prompts in headless mode
 	agentCfg := agent.Config{
-		PlannerModel:    appCfg.PlannerModel,
-		CoderModel:      appCfg.CoderModel,
-		ToolCallerModel: appCfg.ToolCallerModel,
-		CompactorModel:  appCfg.CompactorModel,
+		PlannerModel:          appCfg.PlannerModel,
+		CoderModel:            appCfg.CoderModel,
+		ToolCallerModel:       appCfg.ToolCallerModel,
+		CompactorModel:        appCfg.CompactorModel,
+		ReviewerModel:         appCfg.ReviewerModel,
+		ReviewerExplicitlyOff: isReviewerExplicitlyOff(),
 		Limits: agent.ModelLimits{
 			CompilerMaxTokens:   appCfg.Limits.CompilerMaxTokens,
 			PlannerMaxTokens:    appCfg.Limits.PlannerMaxTokens,
 			CoderMaxTokens:      appCfg.Limits.CoderMaxTokens,
 			ToolCallerMaxTokens: appCfg.Limits.ToolCallerMaxTokens,
 			CompactorMaxTokens:  appCfg.Limits.CompactorMaxTokens,
+			ReviewerMaxTokens:   appCfg.Limits.ReviewerMaxTokens,
 			EmbeddingMaxTokens:  appCfg.Limits.EmbeddingMaxTokens,
 		},
 		MaxIter:   100,
@@ -263,6 +266,16 @@ func writeResult(format string, r headlessResult) {
 	fmt.Printf("iterations: %d\n", r.Iterations)
 }
 
+// isReviewerExplicitlyOff reports whether FORGE_REVIEWER_MODEL was present in
+// the environment with an empty value — the documented opt-out signal.
+// config.Load() already resolved cfg.ReviewerModel's fallback, so this
+// re-checks the raw env var directly rather than threading a second field
+// through config.Config.
+func isReviewerExplicitlyOff() bool {
+	v, present := os.LookupEnv("FORGE_REVIEWER_MODEL")
+	return present && v == ""
+}
+
 func dedup(sorted []string) []string {
 	if len(sorted) == 0 {
 		return sorted
@@ -338,16 +351,19 @@ func runTask(
 	fmt.Fprintf(os.Stderr, "mode: %s\n", task.ExecutionPolicy)
 
 	agentCfg := agent.Config{
-		PlannerModel:    cfg.PlannerModel,
-		CoderModel:      cfg.CoderModel,
-		ToolCallerModel: cfg.ToolCallerModel,
-		CompactorModel:  cfg.CompactorModel,
+		PlannerModel:          cfg.PlannerModel,
+		CoderModel:            cfg.CoderModel,
+		ToolCallerModel:       cfg.ToolCallerModel,
+		CompactorModel:        cfg.CompactorModel,
+		ReviewerModel:         cfg.ReviewerModel,
+		ReviewerExplicitlyOff: isReviewerExplicitlyOff(),
 		Limits: agent.ModelLimits{
 			CompilerMaxTokens:   cfg.Limits.CompilerMaxTokens,
 			PlannerMaxTokens:    cfg.Limits.PlannerMaxTokens,
 			CoderMaxTokens:      cfg.Limits.CoderMaxTokens,
 			ToolCallerMaxTokens: cfg.Limits.ToolCallerMaxTokens,
 			CompactorMaxTokens:  cfg.Limits.CompactorMaxTokens,
+			ReviewerMaxTokens:   cfg.Limits.ReviewerMaxTokens,
 			EmbeddingMaxTokens:  cfg.Limits.EmbeddingMaxTokens,
 		},
 		MaxIter: 100,
@@ -922,16 +938,19 @@ func main() {
 		ac.History = saved.History
 
 		resumeAgentCfg := agent.Config{
-			PlannerModel:    cfg.PlannerModel,
-			CoderModel:      cfg.CoderModel,
-			ToolCallerModel: cfg.ToolCallerModel,
-			CompactorModel:  cfg.CompactorModel,
+			PlannerModel:          cfg.PlannerModel,
+			CoderModel:            cfg.CoderModel,
+			ToolCallerModel:       cfg.ToolCallerModel,
+			CompactorModel:        cfg.CompactorModel,
+			ReviewerModel:         cfg.ReviewerModel,
+			ReviewerExplicitlyOff: isReviewerExplicitlyOff(),
 			Limits: agent.ModelLimits{
 				CompilerMaxTokens:   cfg.Limits.CompilerMaxTokens,
 				PlannerMaxTokens:    cfg.Limits.PlannerMaxTokens,
 				CoderMaxTokens:      cfg.Limits.CoderMaxTokens,
 				ToolCallerMaxTokens: cfg.Limits.ToolCallerMaxTokens,
 				CompactorMaxTokens:  cfg.Limits.CompactorMaxTokens,
+				ReviewerMaxTokens:   cfg.Limits.ReviewerMaxTokens,
 				EmbeddingMaxTokens:  cfg.Limits.EmbeddingMaxTokens,
 			},
 			MaxIter: 100,
