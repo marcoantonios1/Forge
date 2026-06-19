@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -554,6 +555,22 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 			// fingerprinted — the malformed attempt that triggered the retry is
 			// never recorded, so it cannot cause a false stuck signal.
 			stuck.recordToolCall(call.Name, call.Args)
+
+			// write_file is intercepted here for content preview before dispatch.
+			// It bypasses PermissionGate's bare category prompt in favour of the
+			// same SafeConfirmer diff preview that patch blocks get, since it can
+			// silently overwrite or create files.
+			if call.Name == "write_file" {
+				confirmed, confErr := a.confirmWriteFile(ctx, ac, call.Args)
+				if confErr != nil {
+					return confErr
+				}
+				if !confirmed {
+					ac.History = append(ac.History, userMsg("write_file rejected by user."))
+					break
+				}
+			}
+
 			result, err := a.registry.Dispatch(ctx, call)
 			stuck.recordToolResult(call.Name, result)
 			ac.History = append(ac.History, ToolResultMessage(call.Name, result, err))
@@ -675,6 +692,59 @@ func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response stri
 }
 
 const maxReviewRetries = 2
+
+const writeFilePreviewMaxLines = 100
+
+// confirmWriteFile builds a synthetic PatchSet from write_file args and routes
+// it through a.patcher.Confirm so the user gets the same diff-style preview
+// that FORGE_PATCH_BEGIN blocks get. AutoConfirmer returns true immediately, so
+// autonomous mode and --yes continue to skip the prompt entirely.
+func (a *Agent) confirmWriteFile(ctx context.Context, ac *AgentContext, args map[string]any) (bool, error) {
+	path, _ := args["path"].(string)
+	content, _ := args["content"].(string)
+	root, _ := args["root"].(string)
+
+	_, statErr := os.Stat(filepath.Join(root, path))
+	isNew := os.IsNotExist(statErr)
+
+	lines := strings.Split(content, "\n")
+	truncated := false
+	if len(lines) > writeFilePreviewMaxLines {
+		lines = lines[:writeFilePreviewMaxLines]
+		truncated = true
+	}
+
+	hunkLines := make([]string, 0, len(lines)+1)
+	for _, l := range lines {
+		hunkLines = append(hunkLines, "+"+l)
+	}
+	if truncated {
+		remaining := strings.Count(content, "\n") + 1 - writeFilePreviewMaxLines
+		hunkLines = append(hunkLines, fmt.Sprintf(" ... %d more lines ...", remaining))
+	}
+
+	ps := &patch.PatchSet{
+		SessionID: ac.SessionID,
+		TaskID:    ac.Task.RawInput,
+		Patches: []patch.Patch{
+			{
+				Path:  path,
+				IsNew: isNew,
+				Hunks: []patch.Hunk{
+					{
+						OldStart: 1,
+						OldLines: 0,
+						NewStart: 1,
+						NewLines: len(lines),
+						Lines:    hunkLines,
+					},
+				},
+			},
+		},
+	}
+
+	return a.patcher.Confirm(ctx, ps)
+}
 
 // reviewPatch asks the reviewer model whether the proposed diff correctly and
 // safely accomplishes the task. Returns (true, note) on REVIEW_OK, (false,
