@@ -489,8 +489,9 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		a.logCall(ac, plannerRole, plannerModel)
 
 		resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-			Model:    plannerModel,
-			Messages: messages,
+			Model:     plannerModel,
+			MaxTokens: a.cfg.limitForRole(plannerRole),
+			Messages:  messages,
 		})
 		if err != nil {
 			return fmt.Errorf("agent: costguard error: %w", err)
