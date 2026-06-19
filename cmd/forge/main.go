@@ -46,7 +46,8 @@ var (
 	Example: --allowed-tools=read,git_read`)
 	allowMainCommit = flag.Bool("allow-main-commit", false,
 		"allow committing directly to main or master (unsafe)")
-	modeFlag = flag.String("mode", "safe", "execution mode: safe, balanced, or autonomous")
+	modeFlag   = flag.String("mode", "safe", "execution mode: safe, balanced, or autonomous")
+	resumeFlag = flag.Bool("resume", false, "resume the last session for this repo")
 )
 
 type headlessResult struct {
