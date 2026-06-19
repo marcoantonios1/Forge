@@ -1095,7 +1095,8 @@ func (a *Agent) generateRepoSummary(ctx context.Context, ac *AgentContext) strin
 	chat := func(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
 		a.logCall(ac, RolePlanner, model)
 		resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-			Model: model,
+			Model:     model,
+			MaxTokens: a.cfg.limitForRole(RolePlanner),
 			Messages: []costguard.Message{
 				{Role: "system", Content: systemPrompt},
 				{Role: "user", Content: userPrompt},
@@ -1174,8 +1175,9 @@ func (a *Agent) retryToolCallFormat(
 
 	a.logCall(ac, role, model)
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-		Model:    model,
-		Messages: messages,
+		Model:     model,
+		MaxTokens: a.cfg.limitForRole(role),
+		Messages:  messages,
 	})
 	if err != nil || len(resp.Choices) == 0 {
 		return ToolCall{}, false
