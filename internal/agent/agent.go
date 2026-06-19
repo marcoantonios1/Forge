@@ -44,8 +44,19 @@ type ModelLimits struct {
 	CoderMaxTokens      int
 	ToolCallerMaxTokens int
 	CompactorMaxTokens  int
-	ReviewerMaxTokens   int
-	EmbeddingMaxTokens  int
+	ReviewerMaxTokens     int
+	ReviewerContextTokens int
+	EmbeddingMaxTokens    int
+
+	// ContextTokens are the compaction thresholds. Each falls back to the
+	// corresponding MaxTokens value when unset (0). CompilerContextTokens is
+	// the base fallback used when both a role's ContextTokens and MaxTokens
+	// would otherwise resolve to the compiler default.
+	CompilerContextTokens   int
+	PlannerContextTokens    int
+	CoderContextTokens      int
+	ToolCallerContextTokens int
+	CompactorContextTokens  int
 }
 
 type Config struct {
@@ -71,7 +82,8 @@ type Config struct {
 	// alignment between token budget and character-based chunking.
 }
 
-// limitForRole returns the configured token budget for a role.
+// limitForRole returns the maximum output tokens for a role — sent to the
+// Costguard API as max_tokens to cap the model's response length.
 func (c Config) limitForRole(role ModelRole) int {
 	switch role {
 	case RoleCoder:
@@ -84,6 +96,50 @@ func (c Config) limitForRole(role ModelRole) int {
 		return c.Limits.ReviewerMaxTokens
 	default:
 		return c.Limits.PlannerMaxTokens
+	}
+}
+
+// contextLimitForRole returns the compaction threshold for a role — when the
+// estimated input token count exceeds this, older history is summarised before
+// the call. Falls back to limitForRole when no separate context limit is set.
+func (c Config) contextLimitForRole(role ModelRole) int {
+	base := c.Limits.CompilerContextTokens
+	if base == 0 {
+		base = c.Limits.CompilerMaxTokens
+	}
+	switch role {
+	case RoleCoder:
+		if c.Limits.CoderContextTokens > 0 {
+			return c.Limits.CoderContextTokens
+		}
+		if c.Limits.CoderMaxTokens > 0 {
+			return c.Limits.CoderMaxTokens
+		}
+		return base
+	case RoleToolCaller:
+		if c.Limits.ToolCallerContextTokens > 0 {
+			return c.Limits.ToolCallerContextTokens
+		}
+		if c.Limits.ToolCallerMaxTokens > 0 {
+			return c.Limits.ToolCallerMaxTokens
+		}
+		return base
+	case RoleCompactor:
+		if c.Limits.CompactorContextTokens > 0 {
+			return c.Limits.CompactorContextTokens
+		}
+		if c.Limits.CompactorMaxTokens > 0 {
+			return c.Limits.CompactorMaxTokens
+		}
+		return base
+	default: // planner and anything else
+		if c.Limits.PlannerContextTokens > 0 {
+			return c.Limits.PlannerContextTokens
+		}
+		if c.Limits.PlannerMaxTokens > 0 {
+			return c.Limits.PlannerMaxTokens
+		}
+		return base
 	}
 }
 
@@ -279,7 +335,7 @@ func (a *Agent) trimHistory(
 	baseMessages []costguard.Message,
 	role ModelRole,
 ) []costguard.Message {
-	limit := a.cfg.limitForRole(role)
+	limit := a.cfg.contextLimitForRole(role)
 	messages := append(append([]costguard.Message{}, baseMessages...), ac.History...)
 
 	estimated := estimateTokens(messages)
@@ -324,14 +380,15 @@ func (a *Agent) trimHistory(
 // Never returns an error — Costguard failures produce a placeholder string.
 func (a *Agent) summarizeHistory(ctx context.Context, ac *AgentContext, history []costguard.Message) string {
 	compactorModel := a.cfg.selectModel(RoleCompactor)
-	compactorLimit := a.cfg.limitForRole(RoleCompactor)
+	compactorLimit := a.cfg.contextLimitForRole(RoleCompactor)
 
 	chunks := chunkMessages(history, compactorLimit)
 	summaries := make([]string, 0, len(chunks))
 	for i, chunk := range chunks {
 		a.logCall(ac, RoleCompactor, compactorModel)
 		resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-			Model: compactorModel,
+			Model:     compactorModel,
+			MaxTokens: a.cfg.limitForRole(RoleCompactor),
 			Messages: append([]costguard.Message{
 				{Role: "system", Content: compactorSystemPrompt},
 			}, chunk...),
@@ -452,8 +509,9 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		a.logCall(ac, plannerRole, plannerModel)
 
 		resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-			Model:    plannerModel,
-			Messages: messages,
+			Model:     plannerModel,
+			MaxTokens: a.cfg.limitForRole(plannerRole),
+			Messages:  messages,
 		})
 		if err != nil {
 			return fmt.Errorf("agent: costguard error: %w", err)
@@ -763,6 +821,35 @@ func (a *Agent) reviewPatch(ctx context.Context, ac *AgentContext, diffText stri
 	}
 
 	taskJSON, _ := json.MarshalIndent(ac.Task, "", "  ")
+
+	// Truncate diff and forge.md to fit the reviewer's context budget.
+	// Use the same ÷4 character approximation as estimateTokens() elsewhere.
+	// Reserve 25% for task JSON + system prompt overhead; give the remaining
+	// 75% to forge.md + diff, with diff taking priority — truncate forge.md
+	// first if the combined size exceeds the available budget.
+	contextBudget := a.cfg.Limits.ReviewerContextTokens
+	if contextBudget <= 0 {
+		contextBudget = 32000
+	}
+	charBudget := contextBudget * 4
+	overhead := charBudget / 4 // 25% reserved for task JSON + system prompt
+	available := charBudget - overhead - len(taskJSON)
+	if available < 0 {
+		available = 0
+	}
+	diffBudget := (available * 3) / 4 // diff gets 75% of what remains
+	convBudget := available - diffBudget
+
+	if len(conventions) > convBudget {
+		conventions = conventions[:convBudget] + "\n... forge.md truncated to fit reviewer context budget ..."
+	}
+	if len(diffText) > diffBudget {
+		if a.cfg.Debug {
+			fmt.Fprintf(os.Stderr, "[reviewer] diff truncated to fit ~%d token budget\n", contextBudget)
+		}
+		diffText = diffText[:diffBudget] + "\n... diff truncated to fit reviewer context budget ..."
+	}
+
 	userPrompt := fmt.Sprintf(
 		"Task:\n%s\n\nProject conventions (forge.md):\n%s\n\nProposed diff:\n%s",
 		string(taskJSON), conventions, diffText)
@@ -771,7 +858,8 @@ func (a *Agent) reviewPatch(ctx context.Context, ac *AgentContext, diffText stri
 	a.logCall(ac, RoleReviewer, reviewerModel)
 
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-		Model: reviewerModel,
+		Model:     reviewerModel,
+		MaxTokens: a.cfg.limitForRole(RoleReviewer),
 		Messages: []costguard.Message{
 			{Role: "system", Content: reviewerSystemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -860,8 +948,9 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 			estimateTokens(clarifyMsgs), a.cfg.limitForRole(RolePlanner))
 	}
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-		Model:    plannerModel,
-		Messages: clarifyMsgs,
+		Model:     plannerModel,
+		MaxTokens: a.cfg.limitForRole(RolePlanner),
+		Messages:  clarifyMsgs,
 	})
 	if err != nil || len(resp.Choices) == 0 {
 		return ac.Task
@@ -997,7 +1086,8 @@ func (a *Agent) resolveIntent(ctx context.Context, ac *AgentContext, intent stri
 	a.logCall(ac, RoleToolCaller, toolCallerModel)
 
 	req := costguard.ChatRequest{
-		Model: toolCallerModel,
+		Model:     toolCallerModel,
+		MaxTokens: a.cfg.limitForRole(RoleToolCaller),
 		Messages: []costguard.Message{
 			{Role: "system", Content: toolCallerSystemPrompt},
 			{Role: "user", Content: fmt.Sprintf(
@@ -1054,7 +1144,8 @@ func (a *Agent) generateRepoSummary(ctx context.Context, ac *AgentContext) strin
 	chat := func(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
 		a.logCall(ac, RolePlanner, model)
 		resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-			Model: model,
+			Model:     model,
+			MaxTokens: a.cfg.limitForRole(RolePlanner),
 			Messages: []costguard.Message{
 				{Role: "system", Content: systemPrompt},
 				{Role: "user", Content: userPrompt},
@@ -1133,8 +1224,9 @@ func (a *Agent) retryToolCallFormat(
 
 	a.logCall(ac, role, model)
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-		Model:    model,
-		Messages: messages,
+		Model:     model,
+		MaxTokens: a.cfg.limitForRole(role),
+		Messages:  messages,
 	})
 	if err != nil || len(resp.Choices) == 0 {
 		return ToolCall{}, false
