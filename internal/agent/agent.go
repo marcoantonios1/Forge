@@ -509,13 +509,26 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		case strings.Contains(response, "TOOL:"):
 			call, ok := ParseToolCall(response)
 			if !ok {
-				ac.History = append(ac.History, userMsg(
-					"Could not parse tool call. Use exactly:\nTOOL: <name>\nARGS: {\"key\": \"value\"}"))
-				break
+				retryRole := RolePlanner
+				if a.cfg.ToolCallerEnabled() {
+					retryRole = RoleToolCaller
+				}
+				call, ok = a.retryToolCallFormat(ctx, ac, retryRole, response)
+				if !ok {
+					// TODO: log "[<role>] retry also malformed, falling back" in debug
+					// mode as a distinct line to distinguish the retry failure from the
+					// original parse failure.
+					ac.History = append(ac.History, userMsg(
+						"Could not parse tool call. Use exactly:\nTOOL: <name>\nARGS: {\"key\": \"value\"}"))
+					break
+				}
+				// Retry succeeded — proceed as the happy path below.
 			}
 			// Always force root to the repo root — the model must not control it.
 			call.Args["root"] = ac.Root
-			// Record for stuck detection.
+			// Record for stuck detection. Only the successfully-parsed call is
+			// fingerprinted — the malformed attempt that triggered the retry is
+			// never recorded, so it cannot cause a false stuck signal.
 			stuck.recordToolCall(call.Name, call.Args)
 			result, err := a.registry.Dispatch(ctx, call)
 			stuck.recordToolResult(call.Name, result)
@@ -836,6 +849,67 @@ func (a *Agent) resolveIntent(ctx context.Context, ac *AgentContext, intent stri
 		return "", fmt.Errorf("tool caller: response did not contain a TOOL: call: %q", out)
 	}
 	return out, nil
+}
+
+// retryToolCallFormat is called when ParseToolCall fails on a response that
+// was supposed to contain a tool call. It retries exactly once against the
+// same role that produced the malformed response, with an explicit reformat
+// instruction, and returns the parsed ToolCall if the retry succeeds.
+//
+// role is whichever role generated lastResponse: RoleToolCaller if the tool
+// caller is enabled and resolved the call, otherwise RolePlanner.
+//
+// retryToolCallFormat must not append anything to ac.History — the retry
+// exchange is scaffolding for this one attempt and must not become part of
+// the persisted conversation whether it succeeds or fails.
+func (a *Agent) retryToolCallFormat(
+	ctx context.Context,
+	ac *AgentContext,
+	role ModelRole,
+	lastResponse string,
+) (ToolCall, bool) {
+	if a.cfg.Debug {
+		fmt.Fprintf(os.Stderr, "[%s] retrying malformed tool call\n", role)
+	}
+
+	model := a.cfg.selectModel(role)
+	reformatMsg := costguard.Message{
+		Role: "user",
+		Content: "Your last response was not valid. Reformat as exactly:\n" +
+			"TOOL: <tool_name>\nARGS: {\"key\": \"value\"}\n\n" +
+			"Your previous response was:\n" + lastResponse,
+	}
+
+	var messages []costguard.Message
+	if role == RoleToolCaller {
+		// Mirror resolveIntent's self-contained message shape: system prompt +
+		// the reformat instruction. No ac.History involvement — the tool caller
+		// never sees conversation history.
+		messages = []costguard.Message{
+			{Role: "system", Content: toolCallerSystemPrompt},
+			reformatMsg,
+		}
+	} else {
+		// Planner retry: same system/task context as the main loop, plus the
+		// reformat instruction as the latest turn. Constructed fresh — does not
+		// mutate ac.History.
+		messages = append(append([]costguard.Message{
+			SystemMessage(ac.ProjectConfig, ac.Memory),
+			TaskMessage(ac.Task),
+		}, ac.History...), reformatMsg)
+	}
+
+	a.logCall(ac, role, model)
+	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
+		Model:    model,
+		Messages: messages,
+	})
+	if err != nil || len(resp.Choices) == 0 {
+		return ToolCall{}, false
+	}
+
+	retried := strings.TrimSpace(resp.Choices[0].Message.Content)
+	return ParseToolCall(retried)
 }
 
 // intentSuggestsCode returns true if the lowercased intent contains a keyword
