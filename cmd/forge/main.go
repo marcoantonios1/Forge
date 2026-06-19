@@ -962,6 +962,7 @@ func main() {
 				CompactorMaxTokens:  cfg.Limits.CompactorMaxTokens,
 				ReviewerMaxTokens:       cfg.Limits.ReviewerMaxTokens,
 				EmbeddingMaxTokens:      cfg.Limits.EmbeddingMaxTokens,
+				CompilerContextTokens:   cfg.Limits.CompilerContextTokens,
 				PlannerContextTokens:    cfg.Limits.PlannerContextTokens,
 				CoderContextTokens:      cfg.Limits.CoderContextTokens,
 				ToolCallerContextTokens: cfg.Limits.ToolCallerContextTokens,
