@@ -130,7 +130,6 @@ func Load() (*Config, error) {
 		cfg.CompactorModel = v
 	}
 	if v := os.Getenv("FORGE_EMBEDDING_MODEL"); v != "" {
-
 		cfg.EmbeddingModel = v
 	}
 	if v := os.Getenv("FORGE_COMPILER_MAX_TOKENS"); v != "" {
@@ -174,6 +173,14 @@ func Load() (*Config, error) {
 	}
 	if cfg.CompactorModel == "" {
 		cfg.CompactorModel = cfg.CompilerModel
+	}
+	// ReviewerModel: an EXPLICITLY EMPTY FORGE_REVIEWER_MODEL="" disables review
+	// (opt-out for speed). An unset env var falls back to PlannerModel so the
+	// reviewer inherits the strongest model by default.
+	if v, present := os.LookupEnv("FORGE_REVIEWER_MODEL"); present {
+		cfg.ReviewerModel = v // may be "" — that is the explicit opt-out signal
+	} else {
+		cfg.ReviewerModel = cfg.PlannerModel // resolved above, so fallback is correct
 	}
 	if v := os.Getenv("COSTGUARD_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
