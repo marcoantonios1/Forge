@@ -19,6 +19,13 @@ func NewPatchHistory() *PatchHistory {
 	return &PatchHistory{}
 }
 
+// RestoreHistory builds a PatchHistory pre-populated with the given records
+// (oldest first) for session resume. All existing PatchHistory methods
+// (Push, Pop, Undo, etc.) work identically on a restored history.
+func RestoreHistory(records []*PatchRecord) *PatchHistory {
+	return &PatchHistory{records: records}
+}
+
 func (h *PatchHistory) Push(r *PatchRecord) {
 	h.records = append(h.records, r)
 }

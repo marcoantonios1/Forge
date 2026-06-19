@@ -46,7 +46,8 @@ var (
 	Example: --allowed-tools=read,git_read`)
 	allowMainCommit = flag.Bool("allow-main-commit", false,
 		"allow committing directly to main or master (unsafe)")
-	modeFlag = flag.String("mode", "safe", "execution mode: safe, balanced, or autonomous")
+	modeFlag   = flag.String("mode", "safe", "execution mode: safe, balanced, or autonomous")
+	resumeFlag = flag.Bool("resume", false, "resume the last session for this repo")
 )
 
 type headlessResult struct {
@@ -406,6 +407,21 @@ func runTask(
 	if err := memory.Save(cwd, mem); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to save memory: %v\n", err)
 	}
+
+	// Save session for --resume (REPL path only).
+	// TODO: headless (--print) mode could optionally save sessions behind an
+	// explicit flag like --print --save-session; intentionally out of scope here.
+	sess := &session.SavedSession{
+		SessionID: sessionID,
+		Repo:      cwd,
+		RawInput:  task.RawInput,
+		History:   ac.History,
+		Patches:   sessionHistory.AllRecords(),
+		Timestamp: time.Now(),
+	}
+	if err := session.Save(cwd, sess); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to save session: %v\n", err)
+	}
 	return nil
 }
 
@@ -718,6 +734,29 @@ func runMemoryCommand(args []string) int {
 	}
 }
 
+func runSessionsCommand(args []string) int {
+	// TODO: add `forge sessions clear` / `forge sessions clear <repo>` mirroring
+	// `forge memory clear`.
+	if len(args) == 0 || args[0] != "list" {
+		fmt.Fprintln(os.Stderr, "usage: forge sessions list")
+		return 2
+	}
+	sessions := session.List(session.KnownRepos())
+	if len(sessions) == 0 {
+		fmt.Println("no saved sessions")
+		return 0
+	}
+	for _, s := range sessions {
+		id := s.SessionID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		fmt.Printf("%s  [%s]  %s  (%d files)  %s\n",
+			s.Repo, id, s.RawInput, s.Files, s.Timestamp)
+	}
+	return 0
+}
+
 func main() {
 	flag.Parse()
 
@@ -729,6 +768,10 @@ func main() {
 
 	if flag.NArg() > 0 && flag.Arg(0) == "memory" {
 		os.Exit(runMemoryCommand(flag.Args()[1:]))
+	}
+
+	if flag.NArg() > 0 && flag.Arg(0) == "sessions" {
+		os.Exit(runSessionsCommand(flag.Args()[1:]))
 	}
 
 	if *printFlag {
@@ -828,8 +871,115 @@ func main() {
 	}
 
 	// Session-scoped patch history so undo works across tasks.
-	// TODO: persist undo history across sessions (currently in-memory only).
 	sessionHistory := patch.NewPatchHistory()
+
+	// --resume: load last session, confirm, and run agent with restored context.
+	if *resumeFlag {
+		saved, err := session.Load(cwd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "session: %v\n", err)
+			os.Exit(1)
+		}
+		if saved == nil {
+			fmt.Println("no session to resume")
+			os.Exit(0)
+		}
+
+		fileSet := map[string]bool{}
+		for _, rec := range saved.Patches {
+			for p := range rec.Originals {
+				fileSet[p] = true
+			}
+		}
+		shortID := saved.SessionID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		fmt.Printf("Resuming session %s: %s\n%d files modified — continue? [y/n]  ",
+			shortID, saved.RawInput, len(fileSet))
+
+		resumeReader := bufio.NewReader(os.Stdin)
+		ans, _ := resumeReader.ReadString('\n')
+		if strings.ToLower(strings.TrimSpace(ans)) != "y" {
+			fmt.Println("Resume cancelled.")
+			os.Exit(0)
+		}
+
+		// Re-compile original input — guarantees Task is valid under the current
+		// compiler schema rather than a potentially stale serialized one.
+		// TODO: consider persisting the compiled Task alongside RawInput if
+		// resume-time re-compilation drift becomes a problem in practice.
+		resumeCtx := context.Background()
+		resumedTask, compErr := comp.Compile(resumeCtx, saved.RawInput)
+		var reject *compiler.RejectionError
+		if errors.As(compErr, &reject) || compErr != nil {
+			fmt.Fprintf(os.Stderr, "could not resume: re-compiling original task failed: %v\n", compErr)
+			os.Exit(1)
+		}
+
+		restoredHistory := patch.RestoreHistory(saved.Patches)
+		ac := agent.NewAgentContext(saved.SessionID, resumedTask, cwd, projectCfg, restoredHistory, mem)
+		ac.History = saved.History
+
+		resumeAgentCfg := agent.Config{
+			PlannerModel:    cfg.PlannerModel,
+			CoderModel:      cfg.CoderModel,
+			ToolCallerModel: cfg.ToolCallerModel,
+			CompactorModel:  cfg.CompactorModel,
+			Limits: agent.ModelLimits{
+				CompilerMaxTokens:   cfg.Limits.CompilerMaxTokens,
+				PlannerMaxTokens:    cfg.Limits.PlannerMaxTokens,
+				CoderMaxTokens:      cfg.Limits.CoderMaxTokens,
+				ToolCallerMaxTokens: cfg.Limits.ToolCallerMaxTokens,
+				CompactorMaxTokens:  cfg.Limits.CompactorMaxTokens,
+				EmbeddingMaxTokens:  cfg.Limits.EmbeddingMaxTokens,
+			},
+			MaxIter: 100,
+			Debug:   *debugFlag,
+		}
+		resumePreApproved := confirm.ParseAllowedTools(*allowedToolsFlag)
+		if resumePreApproved == nil {
+			resumePreApproved = map[string]bool{}
+		}
+		for cat := range sessionMode.PreApprovedCategories() {
+			resumePreApproved[cat] = true
+		}
+		resumeInteractive := !*yesFlag &&
+			resumedTask.ExecutionPolicy != compiler.PolicyAutonomous &&
+			sessionMode.Interactive()
+		var resumeConfirmer agent.PatchConfirmer
+		if sessionMode.AutoConfirmPatches() || *yesFlag || resumedTask.ExecutionPolicy == compiler.PolicyAutonomous {
+			resumeConfirmer = confirm.AutoConfirmer{}
+		} else {
+			resumeConfirmer = confirm.NewSafeConfirmer(os.Stdin, os.Stderr, ui.IsTTY(os.Stdout), emitter, saved.SessionID)
+		}
+		resumeGate := confirm.NewPermissionGate(
+			os.Stdin, os.Stderr, ui.IsTTY(os.Stdout), *debugFlag,
+			emitter, saved.SessionID, resumePreApproved, resumeInteractive,
+		)
+		resumeRegistry := agent.NewRegistry(cwd, emitter, saved.SessionID, resumeGate, embedClient, index)
+		resumeAgent := agent.New(resumeAgentCfg, client, resumeRegistry, emitter, resumeConfirmer, comp, os.Stdin, os.Stderr)
+
+		runErr := resumeAgent.Run(resumeCtx, ac)
+		if runErr == nil && ac.Patches.Len() > 0 {
+			_, autoC := resumeConfirmer.(confirm.AutoConfirmer)
+			runGitWorkflow(resumeCtx, ac, resumeRegistry, emitter, autoC || sessionMode == mode.ModeAutonomous) //nolint:errcheck
+		}
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
+			os.Exit(1)
+		}
+		// Save the continued session so a second --resume picks up here.
+		session.Save(cwd, &session.SavedSession{ //nolint:errcheck
+			SessionID: ac.SessionID,
+			Repo:      cwd,
+			RawInput:  resumedTask.RawInput,
+			History:   ac.History,
+			Patches:   ac.Patches.AllRecords(),
+			Timestamp: time.Now(),
+		})
+		os.Exit(0)
+	}
 
 	// 8. Signal handling. Ctrl+C cancels a running task without exiting; with
 	// no task running it exits. A second Ctrl+C within 1 second always exits.
