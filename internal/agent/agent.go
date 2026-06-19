@@ -809,7 +809,8 @@ func (a *Agent) reviewPatch(ctx context.Context, ac *AgentContext, diffText stri
 	a.logCall(ac, RoleReviewer, reviewerModel)
 
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-		Model: reviewerModel,
+		Model:     reviewerModel,
+		MaxTokens: a.cfg.limitForRole(RoleReviewer),
 		Messages: []costguard.Message{
 			{Role: "system", Content: reviewerSystemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -898,8 +899,9 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 			estimateTokens(clarifyMsgs), a.cfg.limitForRole(RolePlanner))
 	}
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-		Model:    plannerModel,
-		Messages: clarifyMsgs,
+		Model:     plannerModel,
+		MaxTokens: a.cfg.limitForRole(RolePlanner),
+		Messages:  clarifyMsgs,
 	})
 	if err != nil || len(resp.Choices) == 0 {
 		return ac.Task
@@ -1035,7 +1037,8 @@ func (a *Agent) resolveIntent(ctx context.Context, ac *AgentContext, intent stri
 	a.logCall(ac, RoleToolCaller, toolCallerModel)
 
 	req := costguard.ChatRequest{
-		Model: toolCallerModel,
+		Model:     toolCallerModel,
+		MaxTokens: a.cfg.limitForRole(RoleToolCaller),
 		Messages: []costguard.Message{
 			{Role: "system", Content: toolCallerSystemPrompt},
 			{Role: "user", Content: fmt.Sprintf(
