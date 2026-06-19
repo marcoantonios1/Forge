@@ -33,6 +33,8 @@ const (
 	EventCommandStarted  EventType = "command.started"
 	EventCommandOutput   EventType = "command.output"
 	EventCommandFinished EventType = "command.finished"
+
+	EventPatchReviewed EventType = "patch.reviewed"
 )
 
 type Event struct {
@@ -150,6 +152,15 @@ func GitStashEvent(sessionID, action string) Event {
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 		Payload:   map[string]any{"session_id": sessionID, "action": action},
+	}
+}
+
+func PatchReviewedEvent(sessionID string, ok bool, reason string) Event {
+	return Event{
+		Type:      EventPatchReviewed,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload:   map[string]any{"session_id": sessionID, "ok": ok, "reason": reason},
 	}
 }
 

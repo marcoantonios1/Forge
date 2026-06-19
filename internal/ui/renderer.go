@@ -63,6 +63,8 @@ func (r *Renderer) Emit(e events.Event) {
 		line = formatToolInvoked(e, r.colour)
 	case events.EventToolOutput:
 		line = formatToolOutput(e, r.colour)
+	case events.EventPatchReviewed:
+		line = formatPatchReviewed(e, r.colour)
 	case events.EventFilePatchCreated:
 		line = formatFilePatchCreated(e, r.colour)
 	case events.EventFilePatchApplied:

@@ -116,6 +116,24 @@ func formatToolOutput(e events.Event, colour bool) string {
 	return fmt.Sprintf("  %s  %s  %s", g, toolName, Colour(summary, Red, colour))
 }
 
+func formatPatchReviewed(e events.Event, colour bool) string {
+	ok, _ := e.Payload["ok"].(bool)
+	reason, _ := e.Payload["reason"].(string)
+	if ok {
+		note := reason
+		if note == "" {
+			note = "ok"
+		}
+		label := DimText("🔍 Reviewed:", colour)
+		return fmt.Sprintf("  %s %s", label, note)
+	}
+	if reason == "" {
+		reason = "unknown"
+	}
+	label := Colour("⚠ Review flagged:", Yellow, colour)
+	return fmt.Sprintf("  %s %s — retrying", label, reason)
+}
+
 func formatFilePatchCreated(e events.Event, colour bool) string {
 	files := extractStringSlice(e.Payload["files"])
 	g := glyph("✎", "~", colour)

@@ -597,6 +597,36 @@ func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response stri
 		return nil
 	}
 
+	// Reviewer gate: runs regardless of execution_policy, including autonomous.
+	if a.cfg.ReviewEnabled() {
+		ok, reason := a.reviewPatch(ctx, ac, diffText)
+		a.emitter.Emit(events.PatchReviewedEvent(ac.SessionID, ok, reason))
+
+		if !ok {
+			ac.ReviewRetries++
+			if ac.ReviewRetries > maxReviewRetries {
+				// Max retries exceeded — fall through to showing the user the patch
+				// anyway with a warning. Reset counter for the next patch attempt.
+				ac.ReviewRetries = 0
+				fmt.Fprintln(os.Stderr, "⚠ reviewer flagged this patch twice but max retries reached")
+				// TODO: reviewer rejection count could feed the stuck detector here —
+				// two identical rejection reasons is a stronger stuck signal than the
+				// generic repeated-tool-call heuristic. Left unconnected to keep the
+				// two systems decoupled.
+			} else {
+				ac.History = append(ac.History, userMsg(
+					"Reviewer rejected this patch: "+reason+
+						"\nPlease revise the patch to address this feedback and resubmit."))
+				return nil // patch NOT shown to user; loop continues for coder retry
+			}
+		} else {
+			ac.ReviewRetries = 0
+			// TODO: surface the reviewer's REVIEW_OK note in the patch preview
+			// itself (alongside the diff shown to the user) for extra confidence
+			// at confirmation time.
+		}
+	}
+
 	confirmed, err := a.patcher.Confirm(ctx, ps)
 	if err != nil {
 		return fmt.Errorf("agent: patch confirmation error: %w", err)
@@ -641,6 +671,54 @@ func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response stri
 			len(result.Applied), strings.Join(result.Applied, ", "))))
 
 	return nil
+}
+
+const maxReviewRetries = 2
+
+// reviewPatch asks the reviewer model whether the proposed diff correctly and
+// safely accomplishes the task. Returns (true, note) on REVIEW_OK, (false,
+// reason) on REVIEW_REJECT. On any Costguard error or unparseable response,
+// fails open (returns true, "") so a reviewer outage never blocks patches.
+//
+// reviewPatch must NOT mutate ac.History — only handlePatch appends to history.
+func (a *Agent) reviewPatch(ctx context.Context, ac *AgentContext, diffText string) (ok bool, reason string) {
+	if a.cfg.Debug {
+		fmt.Fprintln(os.Stderr, "[reviewer] checking patch...")
+	}
+
+	var conventions string
+	if ac.ProjectConfig != nil && !ac.ProjectConfig.IsZero() {
+		conventions = ac.ProjectConfig.Raw
+	}
+
+	taskJSON, _ := json.MarshalIndent(ac.Task, "", "  ")
+	userPrompt := fmt.Sprintf(
+		"Task:\n%s\n\nProject conventions (forge.md):\n%s\n\nProposed diff:\n%s",
+		string(taskJSON), conventions, diffText)
+
+	reviewerModel := a.cfg.selectModel(RoleReviewer)
+	a.logCall(ac, RoleReviewer, reviewerModel)
+
+	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
+		Model: reviewerModel,
+		Messages: []costguard.Message{
+			{Role: "system", Content: reviewerSystemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+	})
+	if err != nil || len(resp.Choices) == 0 {
+		return true, "" // fail open
+	}
+
+	out := strings.TrimSpace(resp.Choices[0].Message.Content)
+	switch {
+	case strings.HasPrefix(out, "REVIEW_OK:"):
+		return true, strings.TrimSpace(strings.TrimPrefix(out, "REVIEW_OK:"))
+	case strings.HasPrefix(out, "REVIEW_REJECT:"):
+		return false, strings.TrimSpace(strings.TrimPrefix(out, "REVIEW_REJECT:"))
+	default:
+		return true, "" // unparseable — fail open
+	}
 }
 
 // gatherGitContext runs the three read-only git tools and appends a context message.
