@@ -43,6 +43,7 @@ type ModelLimits struct {
 	CoderMaxTokens      int
 	ToolCallerMaxTokens int
 	CompactorMaxTokens  int
+	ReviewerMaxTokens   int
 	EmbeddingMaxTokens  int
 }
 

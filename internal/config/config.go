@@ -89,6 +89,7 @@ func Load() (*Config, error) {
 			CoderMaxTokens:      32000,
 			ToolCallerMaxTokens: 4000,
 			CompactorMaxTokens:  8000,
+			ReviewerMaxTokens:   8000,
 			EmbeddingMaxTokens:  8000,
 		},
 	}
@@ -156,6 +157,11 @@ func Load() (*Config, error) {
 	if v := os.Getenv("FORGE_COMPACTOR_MAX_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Limits.CompactorMaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_REVIEWER_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Limits.ReviewerMaxTokens = n
 		}
 	}
 	if v := os.Getenv("FORGE_EMBEDDING_MAX_TOKENS"); v != "" {
