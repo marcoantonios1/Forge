@@ -16,6 +16,14 @@ type ModelLimits struct {
 	CompactorMaxTokens  int
 	ReviewerMaxTokens   int
 	EmbeddingMaxTokens  int
+
+	// ContextTokens are the compaction thresholds — if the estimated input
+	// token count exceeds this, older history is summarised before the call.
+	// Each falls back to the corresponding MaxTokens value if unset (0).
+	PlannerContextTokens    int
+	CoderContextTokens      int
+	ToolCallerContextTokens int
+	CompactorContextTokens  int
 }
 
 type Config struct {
@@ -169,6 +177,21 @@ func Load() (*Config, error) {
 			cfg.Limits.EmbeddingMaxTokens = n
 		}
 	}
+	// Context token limits (compaction thresholds). Each falls back to the
+	// corresponding MAX_TOKENS value when the CONTEXT_TOKENS var is unset,
+	// preserving backwards compatibility with existing .env files.
+	parseContextTokens := func(envVar string, fallback int) int {
+		if v := os.Getenv(envVar); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				return n
+			}
+		}
+		return fallback
+	}
+	cfg.Limits.PlannerContextTokens    = parseContextTokens("FORGE_PLANNER_CONTEXT_TOKENS", cfg.Limits.PlannerMaxTokens)
+	cfg.Limits.CoderContextTokens      = parseContextTokens("FORGE_CODER_CONTEXT_TOKENS", cfg.Limits.CoderMaxTokens)
+	cfg.Limits.ToolCallerContextTokens = parseContextTokens("FORGE_TOOL_CALLER_CONTEXT_TOKENS", cfg.Limits.ToolCallerMaxTokens)
+	cfg.Limits.CompactorContextTokens  = parseContextTokens("FORGE_COMPACTOR_CONTEXT_TOKENS", cfg.Limits.CompactorMaxTokens)
 	// Fallback: PlannerModel, CoderModel, CompactorModel fall back to CompilerModel
 	// if left empty. ToolCallerModel and EmbeddingModel do NOT fall back — empty
 	// means "feature disabled", which is the intended default.

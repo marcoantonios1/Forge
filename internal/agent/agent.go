@@ -46,6 +46,13 @@ type ModelLimits struct {
 	CompactorMaxTokens  int
 	ReviewerMaxTokens   int
 	EmbeddingMaxTokens  int
+
+	// ContextTokens are the compaction thresholds. Each falls back to the
+	// corresponding MaxTokens value when unset (0).
+	PlannerContextTokens    int
+	CoderContextTokens      int
+	ToolCallerContextTokens int
+	CompactorContextTokens  int
 }
 
 type Config struct {
@@ -71,7 +78,8 @@ type Config struct {
 	// alignment between token budget and character-based chunking.
 }
 
-// limitForRole returns the configured token budget for a role.
+// limitForRole returns the maximum output tokens for a role — sent to the
+// Costguard API as max_tokens to cap the model's response length.
 func (c Config) limitForRole(role ModelRole) int {
 	switch role {
 	case RoleCoder:
@@ -83,6 +91,34 @@ func (c Config) limitForRole(role ModelRole) int {
 	case RoleReviewer:
 		return c.Limits.ReviewerMaxTokens
 	default:
+		return c.Limits.PlannerMaxTokens
+	}
+}
+
+// contextLimitForRole returns the compaction threshold for a role — when the
+// estimated input token count exceeds this, older history is summarised before
+// the call. Falls back to limitForRole when no separate context limit is set.
+func (c Config) contextLimitForRole(role ModelRole) int {
+	switch role {
+	case RoleCoder:
+		if c.Limits.CoderContextTokens > 0 {
+			return c.Limits.CoderContextTokens
+		}
+		return c.Limits.CoderMaxTokens
+	case RoleToolCaller:
+		if c.Limits.ToolCallerContextTokens > 0 {
+			return c.Limits.ToolCallerContextTokens
+		}
+		return c.Limits.ToolCallerMaxTokens
+	case RoleCompactor:
+		if c.Limits.CompactorContextTokens > 0 {
+			return c.Limits.CompactorContextTokens
+		}
+		return c.Limits.CompactorMaxTokens
+	default: // planner and anything else
+		if c.Limits.PlannerContextTokens > 0 {
+			return c.Limits.PlannerContextTokens
+		}
 		return c.Limits.PlannerMaxTokens
 	}
 }
@@ -279,7 +315,7 @@ func (a *Agent) trimHistory(
 	baseMessages []costguard.Message,
 	role ModelRole,
 ) []costguard.Message {
-	limit := a.cfg.limitForRole(role)
+	limit := a.cfg.contextLimitForRole(role)
 	messages := append(append([]costguard.Message{}, baseMessages...), ac.History...)
 
 	estimated := estimateTokens(messages)
@@ -324,14 +360,15 @@ func (a *Agent) trimHistory(
 // Never returns an error — Costguard failures produce a placeholder string.
 func (a *Agent) summarizeHistory(ctx context.Context, ac *AgentContext, history []costguard.Message) string {
 	compactorModel := a.cfg.selectModel(RoleCompactor)
-	compactorLimit := a.cfg.limitForRole(RoleCompactor)
+	compactorLimit := a.cfg.contextLimitForRole(RoleCompactor)
 
 	chunks := chunkMessages(history, compactorLimit)
 	summaries := make([]string, 0, len(chunks))
 	for i, chunk := range chunks {
 		a.logCall(ac, RoleCompactor, compactorModel)
 		resp, err := a.client.Chat(ctx, costguard.ChatRequest{
-			Model: compactorModel,
+			Model:     compactorModel,
+			MaxTokens: a.cfg.limitForRole(RoleCompactor),
 			Messages: append([]costguard.Message{
 				{Role: "system", Content: compactorSystemPrompt},
 			}, chunk...),
