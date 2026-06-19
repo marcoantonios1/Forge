@@ -102,6 +102,10 @@ func (c Config) selectModel(role ModelRole) string {
 		if c.CompactorModel != "" {
 			return c.CompactorModel
 		}
+	case RoleReviewer:
+		if c.ReviewerModel != "" {
+			return c.ReviewerModel
+		}
 	}
 	return c.PlannerModel
 }
@@ -109,6 +113,13 @@ func (c Config) selectModel(role ModelRole) string {
 // ToolCallerEnabled reports whether a distinct tool-caller model is configured.
 func (c Config) ToolCallerEnabled() bool {
 	return strings.TrimSpace(c.ToolCallerModel) != ""
+}
+
+// ReviewEnabled reports whether patch review is active. Disabled only when the
+// user explicitly set FORGE_REVIEWER_MODEL="" — an unset env var still means
+// "review with the planner model" (the default), not "no review."
+func (c Config) ReviewEnabled() bool {
+	return !c.ReviewerExplicitlyOff
 }
 
 // PatchConfirmer abstracts user confirmation for patches.
