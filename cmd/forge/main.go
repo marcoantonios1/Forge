@@ -171,6 +171,7 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 			CoderMaxTokens:      appCfg.Limits.CoderMaxTokens,
 			ToolCallerMaxTokens: appCfg.Limits.ToolCallerMaxTokens,
 			CompactorMaxTokens:  appCfg.Limits.CompactorMaxTokens,
+			ReviewerMaxTokens:   appCfg.Limits.ReviewerMaxTokens,
 			EmbeddingMaxTokens:  appCfg.Limits.EmbeddingMaxTokens,
 		},
 		MaxIter:   100,

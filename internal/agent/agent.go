@@ -80,7 +80,7 @@ func (c Config) limitForRole(role ModelRole) int {
 	case RoleCompactor:
 		return c.Limits.CompactorMaxTokens
 	case RoleReviewer:
-		return c.Limits.PlannerMaxTokens // reviewer shares the planner's budget
+		return c.Limits.ReviewerMaxTokens
 	default:
 		return c.Limits.PlannerMaxTokens
 	}
