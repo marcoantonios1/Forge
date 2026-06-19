@@ -32,6 +32,7 @@ type Config struct {
 	CoderModel        string
 	ToolCallerModel   string // empty = tool-caller disabled, planner emits TOOL:/ARGS: directly
 	CompactorModel    string
+	ReviewerModel     string
 	EmbeddingModel    string
 	Limits            ModelLimits
 }
@@ -129,6 +130,7 @@ func Load() (*Config, error) {
 		cfg.CompactorModel = v
 	}
 	if v := os.Getenv("FORGE_EMBEDDING_MODEL"); v != "" {
+
 		cfg.EmbeddingModel = v
 	}
 	if v := os.Getenv("FORGE_COMPILER_MAX_TOKENS"); v != "" {
