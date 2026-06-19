@@ -407,6 +407,21 @@ func runTask(
 	if err := memory.Save(cwd, mem); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to save memory: %v\n", err)
 	}
+
+	// Save session for --resume (REPL path only).
+	// TODO: headless (--print) mode could optionally save sessions behind an
+	// explicit flag like --print --save-session; intentionally out of scope here.
+	sess := &session.SavedSession{
+		SessionID: sessionID,
+		Repo:      cwd,
+		RawInput:  task.RawInput,
+		History:   ac.History,
+		Patches:   sessionHistory.AllRecords(),
+		Timestamp: time.Now(),
+	}
+	if err := session.Save(cwd, sess); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to save session: %v\n", err)
+	}
 	return nil
 }
 
@@ -719,6 +734,29 @@ func runMemoryCommand(args []string) int {
 	}
 }
 
+func runSessionsCommand(args []string) int {
+	// TODO: add `forge sessions clear` / `forge sessions clear <repo>` mirroring
+	// `forge memory clear`.
+	if len(args) == 0 || args[0] != "list" {
+		fmt.Fprintln(os.Stderr, "usage: forge sessions list")
+		return 2
+	}
+	sessions := session.List(session.KnownRepos())
+	if len(sessions) == 0 {
+		fmt.Println("no saved sessions")
+		return 0
+	}
+	for _, s := range sessions {
+		id := s.SessionID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		fmt.Printf("%s  [%s]  %s  (%d files)  %s\n",
+			s.Repo, id, s.RawInput, s.Files, s.Timestamp)
+	}
+	return 0
+}
+
 func main() {
 	flag.Parse()
 
@@ -730,6 +768,10 @@ func main() {
 
 	if flag.NArg() > 0 && flag.Arg(0) == "memory" {
 		os.Exit(runMemoryCommand(flag.Args()[1:]))
+	}
+
+	if flag.NArg() > 0 && flag.Arg(0) == "sessions" {
+		os.Exit(runSessionsCommand(flag.Args()[1:]))
 	}
 
 	if *printFlag {
