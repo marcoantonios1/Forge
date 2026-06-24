@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	defaultMaxIter    = 100
 	defaultStuckAfter = 3 // minimum iterations before stuck check fires
 )
 
@@ -68,7 +67,6 @@ type Config struct {
 	ReviewerExplicitlyOff bool   // true when FORGE_REVIEWER_MODEL="" was explicitly set
 	EmbeddingModel        string
 	Limits                ModelLimits
-	MaxIter               int
 	AutoApply             bool
 	Debug                 bool
 	StuckAfterIterations  int // minimum iterations before stuck check; default 3
@@ -207,9 +205,6 @@ func New(
 	clarifyIn  io.Reader,
 	clarifyOut io.Writer,
 ) *Agent {
-	if cfg.MaxIter <= 0 {
-		cfg.MaxIter = defaultMaxIter
-	}
 	if cfg.StuckAfterIterations <= 0 {
 		cfg.StuckAfterIterations = defaultStuckAfter
 	}
@@ -1054,26 +1049,12 @@ func (a *Agent) logCall(ac *AgentContext, role ModelRole, model string) {
 	if !a.cfg.Debug {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "[agent] iteration %d/%d  [%s]  model=%s\n",
-		ac.Iteration+1, a.cfg.MaxIter, role, model)
+	fmt.Fprintf(os.Stderr, "[agent] iteration %d  [%s]  model=%s\n",
+		ac.Iteration+1, role, model)
 }
 
 func (a *Agent) advanceIteration(ac *AgentContext) error {
 	ac.Iteration++
-	if ac.Iteration >= a.cfg.MaxIter {
-		backstopMsg := fmt.Sprintf("task exceeded maximum iterations (%d)", a.cfg.MaxIter)
-		a.emitter.Emit(events.Event{
-			Type:      events.EventTaskFailed,
-			Timestamp: time.Now(),
-			SessionID: ac.SessionID,
-			Payload: map[string]any{
-				"session_id": ac.SessionID,
-				"reason":     backstopMsg,
-				"iterations": ac.Iteration,
-			},
-		})
-		return fmt.Errorf("agent: %s", backstopMsg)
-	}
 	return nil
 }
 
