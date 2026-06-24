@@ -16,9 +16,9 @@ import (
 )
 
 type Client struct {
-	cfg    *config.Config
-	http   *http.Client
-	base   string
+	cfg  *config.Config
+	http *http.Client
+	base string
 }
 
 func New(cfg *config.Config) *Client {
@@ -173,7 +173,6 @@ func (c *Client) do(ctx context.Context, url string, body []byte) (*http.Respons
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("X-Costguard-Agent", c.cfg.CostguardAgent)
-	req.Header.Set("X-Costguard-Mode", c.cfg.Mode)
 	if c.cfg.CostguardProvider != "" {
 		req.Header.Set("X-Costguard-Provider", c.cfg.CostguardProvider)
 	}
@@ -240,7 +239,7 @@ func backoff(base time.Duration, attempt int, max time.Duration) time.Duration {
 	}
 	// ±10% jitter
 	jitter := float64(d) * 0.1
-	d += time.Duration((rand.Float64()*2-1)*jitter)
+	d += time.Duration((rand.Float64()*2 - 1) * jitter)
 	if d < 0 {
 		d = 0
 	}

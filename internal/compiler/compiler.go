@@ -50,6 +50,9 @@ func (c *Compiler) Compile(ctx context.Context, rawInput string) (*Task, error) 
 	}
 
 	raw := resp.Choices[0].Message.Content
+	if c.debug {
+		fmt.Fprintf(os.Stderr, "[compiler] raw model response:\n%s\n", raw)
+	}
 	jsonStr, err := extractJSON(raw)
 	if err != nil {
 		return nil, err

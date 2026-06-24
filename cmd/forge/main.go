@@ -180,7 +180,6 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 			ToolCallerContextTokens: appCfg.Limits.ToolCallerContextTokens,
 			CompactorContextTokens:  appCfg.Limits.CompactorContextTokens,
 		},
-		MaxIter:   100,
 		AutoApply: true,
 		Debug:     debug,
 	}
@@ -378,7 +377,6 @@ func runTask(
 			ToolCallerContextTokens: cfg.Limits.ToolCallerContextTokens,
 			CompactorContextTokens:  cfg.Limits.CompactorContextTokens,
 		},
-		MaxIter: 100,
 		Debug:   debug,
 	}
 
@@ -971,7 +969,6 @@ func main() {
 				ToolCallerContextTokens: cfg.Limits.ToolCallerContextTokens,
 				CompactorContextTokens:  cfg.Limits.CompactorContextTokens,
 			},
-			MaxIter: 100,
 			Debug:   *debugFlag,
 		}
 		resumePreApproved := confirm.ParseAllowedTools(*allowedToolsFlag)

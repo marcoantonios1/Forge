@@ -33,7 +33,6 @@ type ModelLimits struct {
 
 type Config struct {
 	CostguardURL      string
-	Mode              string
 	CostguardAgent    string
 	CostguardProvider string
 	CostguardTeam     string
@@ -67,6 +66,8 @@ func loadDotEnv() {
 		if idx := strings.Index(line, " #"); idx != -1 {
 			line = strings.TrimSpace(line[:idx])
 		}
+		// Strip optional "export " prefix so both bare and shell-style .env files work.
+		line = strings.TrimPrefix(line, "export ")
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			continue
@@ -85,9 +86,8 @@ func loadDotEnv() {
 func Load() (*Config, error) {
 	loadDotEnv()
 	cfg := &Config{
-		CostguardURL:    "http://localhost:8080",
-		Mode:            "balanced",
-		CostguardAgent:  "forge",
+		CostguardURL:   "http://localhost:8080",
+		CostguardAgent: "forge",
 		Timeout:         60 * time.Second,
 		MaxRetries:      3,
 		CompilerModel:   "claude-sonnet-4-6",
@@ -98,8 +98,8 @@ func Load() (*Config, error) {
 		EmbeddingModel:  "",
 		Limits: ModelLimits{
 			CompilerMaxTokens:   8000,
-			PlannerMaxTokens:    32000,
-			CoderMaxTokens:      32000,
+			PlannerMaxTokens:    16000,
+			CoderMaxTokens:      16000,
 			ToolCallerMaxTokens: 4000,
 			CompactorMaxTokens:    8000,
 			ReviewerMaxTokens:     8000,
@@ -111,10 +111,7 @@ func Load() (*Config, error) {
 	if v := os.Getenv("COSTGUARD_URL"); v != "" {
 		cfg.CostguardURL = v
 	}
-	if v := os.Getenv("COSTGUARD_MODE"); v != "" {
-		cfg.Mode = v
-	}
-	if v := os.Getenv("COSTGUARD_AGENT"); v != "" {
+if v := os.Getenv("COSTGUARD_AGENT"); v != "" {
 		cfg.CostguardAgent = v
 	}
 	if v := os.Getenv("COSTGUARD_PROVIDER"); v != "" {

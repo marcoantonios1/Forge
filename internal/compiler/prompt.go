@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 )
@@ -47,8 +48,82 @@ Rules for priority:
 
 Output only the JSON object. Nothing else.`
 
-// extractJSON returns the first JSON object found in raw, stripping any
-// accidental markdown fences or surrounding whitespace.
+// stripXMLBlocks removes XML-style tag pairs (e.g. <thinking>…</thinking>)
+// that some models prepend to their output. Unmatched or self-closing tags are
+// deleted in place. Operates in a loop so nested blocks are also removed.
+func stripXMLBlocks(s string) string {
+	for {
+		lt := strings.Index(s, "<")
+		if lt == -1 {
+			break
+		}
+		gt := strings.Index(s[lt:], ">")
+		if gt == -1 {
+			break
+		}
+		inner := strings.TrimSpace(s[lt+1 : lt+gt])
+		// Skip closing tags, self-closing tags, declarations, and processing instructions.
+		if inner == "" || inner[0] == '/' || inner[0] == '?' || inner[0] == '!' || inner[len(inner)-1] == '/' {
+			s = s[:lt] + s[lt+gt+1:]
+			continue
+		}
+		// Extract the tag name (first word, ignoring attributes).
+		tagName := inner
+		if sp := strings.IndexAny(inner, " \t\r\n"); sp != -1 {
+			tagName = inner[:sp]
+		}
+		closing := "</" + tagName + ">"
+		ci := strings.Index(s[lt:], closing)
+		if ci == -1 {
+			// No matching closing tag — remove just the opening tag and move on.
+			s = s[:lt] + s[lt+gt+1:]
+			continue
+		}
+		s = s[:lt] + s[lt+ci+len(closing):]
+	}
+	return strings.TrimSpace(s)
+}
+
+// matchingBrace returns the index of the closing '}' that matches the '{' at
+// position start, or -1 if none is found. Handles nested objects and strings.
+func matchingBrace(s string, start int) int {
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		ch := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString {
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// extractJSON returns the first valid JSON object found in raw, stripping
+// markdown fences and XML-style thinking blocks first. It tries every '{' in
+// the cleaned string so that stray {…} in prose before the real object are
+// skipped.
 func extractJSON(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 
@@ -67,10 +142,25 @@ func extractJSON(raw string) (string, error) {
 		}
 	}
 
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start == -1 || end == -1 || end < start {
-		return "", errors.New("compiler: no JSON object found in LLM response")
+	// Remove XML-style blocks (e.g. <thinking>…</thinking>) so that {…}
+	// inside them cannot produce false candidates.
+	s = stripXMLBlocks(s)
+
+	// Try every '{' as a potential object start and return the first candidate
+	// that is valid JSON. This skips stray {…} in surrounding prose.
+	for i := 0; i < len(s); i++ {
+		if s[i] != '{' {
+			continue
+		}
+		end := matchingBrace(s, i)
+		if end == -1 {
+			continue
+		}
+		candidate := s[i : end+1]
+		if json.Valid([]byte(candidate)) {
+			return candidate, nil
+		}
 	}
-	return s[start : end+1], nil
+
+	return "", errors.New("compiler: no JSON object found in LLM response")
 }
