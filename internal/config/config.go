@@ -98,8 +98,8 @@ func Load() (*Config, error) {
 		EmbeddingModel:  "",
 		Limits: ModelLimits{
 			CompilerMaxTokens:   8000,
-			PlannerMaxTokens:    32000,
-			CoderMaxTokens:      32000,
+			PlannerMaxTokens:    16000,
+			CoderMaxTokens:      16000,
 			ToolCallerMaxTokens: 4000,
 			CompactorMaxTokens:    8000,
 			ReviewerMaxTokens:     8000,
