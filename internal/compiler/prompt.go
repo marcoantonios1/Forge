@@ -47,8 +47,10 @@ Rules for priority:
 
 Output only the JSON object. Nothing else.`
 
-// extractJSON returns the first JSON object found in raw, stripping any
-// accidental markdown fences or surrounding whitespace.
+// extractJSON returns the first complete JSON object found in raw, stripping
+// markdown fences and ignoring any surrounding prose or model thinking tags.
+// It uses bracket-depth tracking so it is not confused by { } inside
+// <thinking> blocks or after the closing brace.
 func extractJSON(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 
@@ -67,10 +69,42 @@ func extractJSON(raw string) (string, error) {
 		}
 	}
 
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start == -1 || end == -1 || end < start {
-		return "", errors.New("compiler: no JSON object found in LLM response")
+	// Walk the string tracking bracket depth and string context so we return
+	// exactly the first complete {...} object, ignoring anything before or after.
+	depth := 0
+	start := -1
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString {
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			depth--
+			if depth == 0 && start != -1 {
+				return s[start : i+1], nil
+			}
+		}
 	}
-	return s[start : end+1], nil
+
+	return "", errors.New("compiler: no JSON object found in LLM response")
 }
