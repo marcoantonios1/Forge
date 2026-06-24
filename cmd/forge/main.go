@@ -1058,9 +1058,43 @@ func main() {
 			fmt.Println("\nbye.")
 			return
 		}
+		// Drain any remaining buffered data so multi-line pastes are captured whole.
+		// When the user pastes, all lines arrive in the buffer simultaneously;
+		// ReadString stops at the first '\n', so we accumulate the rest here.
+		for reader.Buffered() > 0 {
+			more, readErr := reader.ReadString('\n')
+			line += more
+			if readErr != nil {
+				break
+			}
+		}
 		line = strings.TrimRight(line, "\r\n")
 		if strings.TrimSpace(line) == "" {
 			continue
+		}
+
+		// Multiline mode: "<<<" (alone or as prefix) starts accumulation; a lone "." line submits.
+		if strings.HasPrefix(strings.TrimSpace(line), "<<<") {
+			var parts []string
+			if first := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "<<<")); first != "" {
+				parts = append(parts, first)
+			}
+			for {
+				fmt.Print("... ")
+				ml, mlErr := reader.ReadString('\n')
+				if mlErr != nil {
+					break
+				}
+				ml = strings.TrimRight(ml, "\r\n")
+				if ml == "." {
+					break
+				}
+				parts = append(parts, ml)
+			}
+			line = strings.Join(parts, "\n")
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
 		}
 
 		if strings.TrimSpace(line) == "undo" {
