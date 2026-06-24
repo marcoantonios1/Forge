@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 )
@@ -83,38 +84,13 @@ func stripXMLBlocks(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// extractJSON returns the first complete JSON object found in raw, stripping
-// markdown fences and XML-style thinking blocks before applying bracket-depth
-// tracking to locate the object boundaries precisely.
-func extractJSON(raw string) (string, error) {
-	s := strings.TrimSpace(raw)
-
-	// Strip markdown fences if present.
-	if strings.HasPrefix(s, "```") {
-		end := strings.LastIndex(s, "```")
-		if end > 3 {
-			s = strings.TrimSpace(s[3:end])
-			// Strip optional language tag on opening fence line.
-			if nl := strings.Index(s, "\n"); nl != -1 {
-				first := strings.TrimSpace(s[:nl])
-				if !strings.Contains(first, "{") {
-					s = strings.TrimSpace(s[nl+1:])
-				}
-			}
-		}
-	}
-
-	// Remove XML-style blocks (e.g. <thinking>…</thinking>) so that any
-	// {…} inside them does not confuse the bracket tracker below.
-	s = stripXMLBlocks(s)
-
-	// Walk the string tracking bracket depth and string context so we return
-	// exactly the first complete {...} object, ignoring anything before or after.
+// matchingBrace returns the index of the closing '}' that matches the '{' at
+// position start, or -1 if none is found. Handles nested objects and strings.
+func matchingBrace(s string, start int) int {
 	depth := 0
-	start := -1
 	inString := false
 	escaped := false
-	for i := 0; i < len(s); i++ {
+	for i := start; i < len(s); i++ {
 		ch := s[i]
 		if escaped {
 			escaped = false
@@ -133,15 +109,56 @@ func extractJSON(raw string) (string, error) {
 		case '"':
 			inString = true
 		case '{':
-			if depth == 0 {
-				start = i
-			}
 			depth++
 		case '}':
 			depth--
-			if depth == 0 && start != -1 {
-				return s[start : i+1], nil
+			if depth == 0 {
+				return i
 			}
+		}
+	}
+	return -1
+}
+
+// extractJSON returns the first valid JSON object found in raw, stripping
+// markdown fences and XML-style thinking blocks first. It tries every '{' in
+// the cleaned string so that stray {…} in prose before the real object are
+// skipped.
+func extractJSON(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+
+	// Strip markdown fences if present.
+	if strings.HasPrefix(s, "```") {
+		end := strings.LastIndex(s, "```")
+		if end > 3 {
+			s = strings.TrimSpace(s[3:end])
+			// Strip optional language tag on opening fence line.
+			if nl := strings.Index(s, "\n"); nl != -1 {
+				first := strings.TrimSpace(s[:nl])
+				if !strings.Contains(first, "{") {
+					s = strings.TrimSpace(s[nl+1:])
+				}
+			}
+		}
+	}
+
+	// Remove XML-style blocks (e.g. <thinking>…</thinking>) so that {…}
+	// inside them cannot produce false candidates.
+	s = stripXMLBlocks(s)
+
+	// Try every '{' as a potential object start and return the first candidate
+	// that is valid JSON. This skips stray {…} in surrounding prose.
+	for i := 0; i < len(s); i++ {
+		if s[i] != '{' {
+			continue
+		}
+		end := matchingBrace(s, i)
+		if end == -1 {
+			continue
+		}
+		candidate := s[i : end+1]
+		if json.Valid([]byte(candidate)) {
+			return candidate, nil
 		}
 	}
 
