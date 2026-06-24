@@ -855,6 +855,7 @@ func (a *Agent) reviewPatch(ctx context.Context, ac *AgentContext, diffText stri
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
 		Model:     reviewerModel,
 		MaxTokens: a.cfg.limitForRole(RoleReviewer),
+		Mode:      "balanced",
 		Messages: []costguard.Message{
 			{Role: "system", Content: reviewerSystemPrompt},
 			{Role: "user", Content: userPrompt},

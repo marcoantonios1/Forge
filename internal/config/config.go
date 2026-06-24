@@ -67,6 +67,8 @@ func loadDotEnv() {
 		if idx := strings.Index(line, " #"); idx != -1 {
 			line = strings.TrimSpace(line[:idx])
 		}
+		// Strip optional "export " prefix so both bare and shell-style .env files work.
+		line = strings.TrimPrefix(line, "export ")
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			continue
