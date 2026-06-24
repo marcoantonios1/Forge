@@ -52,7 +52,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 			fmt.Fprintf(os.Stderr, "[costguard] → POST /v1/chat/completions model=%s\n", req.Model)
 		}
 
-		httpResp, err := c.do(ctx, url, body, req.Mode)
+		httpResp, err := c.do(ctx, url, body)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +119,7 @@ func (c *Client) Embed(ctx context.Context, req EmbeddingRequest) (*EmbeddingRes
 			fmt.Fprintf(os.Stderr, "[costguard] → POST /v1/embeddings model=%s\n", req.Model)
 		}
 
-		httpResp, err := c.do(ctx, url, body, "")
+		httpResp, err := c.do(ctx, url, body)
 		if err != nil {
 			return nil, err
 		}
@@ -165,7 +165,7 @@ func (c *Client) Embed(ctx context.Context, req EmbeddingRequest) (*EmbeddingRes
 	}
 }
 
-func (c *Client) do(ctx context.Context, url string, body []byte, modeOverride string) (*http.Response, error) {
+func (c *Client) do(ctx context.Context, url string, body []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("costguard: build request: %w", err)
@@ -173,11 +173,6 @@ func (c *Client) do(ctx context.Context, url string, body []byte, modeOverride s
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("X-Costguard-Agent", c.cfg.CostguardAgent)
-	mode := c.cfg.Mode
-	if modeOverride != "" {
-		mode = modeOverride
-	}
-	req.Header.Set("X-Costguard-Mode", mode)
 	if c.cfg.CostguardProvider != "" {
 		req.Header.Set("X-Costguard-Provider", c.cfg.CostguardProvider)
 	}

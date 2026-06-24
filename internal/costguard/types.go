@@ -10,10 +10,6 @@ type ChatRequest struct {
 	Messages  []Message `json:"messages"`
 	Stream    bool      `json:"stream"`
 	MaxTokens int       `json:"max_tokens,omitempty"` // 0 = let the provider decide
-	// Mode overrides the client's default X-Costguard-Mode header for this
-	// request only. Not serialized — used to force cloud routing for specific
-	// roles (e.g. the reviewer) while other roles use a local provider.
-	Mode string `json:"-"`
 }
 
 type Choice struct {
