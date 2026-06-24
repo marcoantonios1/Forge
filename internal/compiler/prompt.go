@@ -47,10 +47,45 @@ Rules for priority:
 
 Output only the JSON object. Nothing else.`
 
+// stripXMLBlocks removes XML-style tag pairs (e.g. <thinking>…</thinking>)
+// that some models prepend to their output. Unmatched or self-closing tags are
+// deleted in place. Operates in a loop so nested blocks are also removed.
+func stripXMLBlocks(s string) string {
+	for {
+		lt := strings.Index(s, "<")
+		if lt == -1 {
+			break
+		}
+		gt := strings.Index(s[lt:], ">")
+		if gt == -1 {
+			break
+		}
+		inner := strings.TrimSpace(s[lt+1 : lt+gt])
+		// Skip closing tags, self-closing tags, declarations, and processing instructions.
+		if inner == "" || inner[0] == '/' || inner[0] == '?' || inner[0] == '!' || inner[len(inner)-1] == '/' {
+			s = s[:lt] + s[lt+gt+1:]
+			continue
+		}
+		// Extract the tag name (first word, ignoring attributes).
+		tagName := inner
+		if sp := strings.IndexAny(inner, " \t\r\n"); sp != -1 {
+			tagName = inner[:sp]
+		}
+		closing := "</" + tagName + ">"
+		ci := strings.Index(s[lt:], closing)
+		if ci == -1 {
+			// No matching closing tag — remove just the opening tag and move on.
+			s = s[:lt] + s[lt+gt+1:]
+			continue
+		}
+		s = s[:lt] + s[lt+ci+len(closing):]
+	}
+	return strings.TrimSpace(s)
+}
+
 // extractJSON returns the first complete JSON object found in raw, stripping
-// markdown fences and ignoring any surrounding prose or model thinking tags.
-// It uses bracket-depth tracking so it is not confused by { } inside
-// <thinking> blocks or after the closing brace.
+// markdown fences and XML-style thinking blocks before applying bracket-depth
+// tracking to locate the object boundaries precisely.
 func extractJSON(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 
@@ -68,6 +103,10 @@ func extractJSON(raw string) (string, error) {
 			}
 		}
 	}
+
+	// Remove XML-style blocks (e.g. <thinking>…</thinking>) so that any
+	// {…} inside them does not confuse the bracket tracker below.
+	s = stripXMLBlocks(s)
 
 	// Walk the string tracking bracket depth and string context so we return
 	// exactly the first complete {...} object, ignoring anything before or after.
