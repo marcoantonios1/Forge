@@ -41,6 +41,12 @@ Available tools and their required arguments:
   git_log
     ARGS: {"root": "<repo root>", "limit": <int, optional>, "path": "<file, optional>"}
 
+  write_file
+    ARGS: {"root": "<repo root>", "path": "<relative file path>", "content": "<full file content>"}
+    Creates or fully replaces a file. Prefer FORGE_PATCH_BEGIN/END for
+    targeted edits to existing files; use write_file only when creating a new
+    file or replacing the entire content of an existing one.
+
   run_command
     ARGS: {"command": "<shell command>", "root": "<repo root>",
            "timeout_seconds": <int, optional, default 30>}
