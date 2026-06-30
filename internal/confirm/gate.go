@@ -34,7 +34,10 @@ var toolCategory = map[string]string{
 	"git_pull":     "git_write",
 	"git_commit":   "git_write",
 	"git_push":     "git_write",
-	"run_command":  "run",
+	"run_command":     "run",
+	"symbol_lookup":   "read",
+	"dependency_graph": "read",
+	"ast_parse":       "read",
 }
 
 // allCategories is the complete set of known categories used by "all" expansion.
