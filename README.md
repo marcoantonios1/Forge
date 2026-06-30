@@ -255,6 +255,8 @@ internal/
     projectconfig/     forge.md loader
     forgeinit/         `forge init` filesystem heuristics (build/test/language detection)
     compiler/          natural language → typed Task struct
+    codeintel/         symbol lookup, dependency graph, and lightweight AST
+                       parsing for Go/TypeScript/Python
     costguard/         OpenAI-compatible HTTP client with retry/backoff
     agent/             control loop, tool registry, system prompt, clarification,
                        reviewer, stuck detector
