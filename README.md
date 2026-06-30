@@ -273,6 +273,25 @@ internal/
     ui/                terminal renderer, diff coloriser, TTY detection
 ```
 
+## Ignoring files with .forgeignore
+
+Create a `.forgeignore` file in your repo root to exclude directories Forge
+should never read, index, or search. It uses identical syntax to `.gitignore`
+and is merged with it — a path matching either file is excluded:
+
+```
+# .forgeignore — same syntax as .gitignore
+node_modules/
+vendor/
+dist/
+build/
+*.generated.go
+coverage/
+```
+
+`.forgeignore` is checked by `list_files`, `search_code`, and the embedding
+indexer. It does not replace `.gitignore`; both files apply additively.
+
 ## Development
 
 ```bash
