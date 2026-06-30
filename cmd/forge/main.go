@@ -140,7 +140,7 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 		if buildErr != nil {
 			fmt.Fprintf(os.Stderr, "\nwarning: indexing failed: %v — semantic_search will fall back to grep\n", buildErr)
 		} else {
-			fmt.Fprintf(os.Stderr, "\rIndexing repo... %d files done.\n", len(newIndex.FileHashes))
+			fmt.Fprintf(os.Stderr, "\rIndexing repo... %d files done.                    \n", len(newIndex.FileHashes))
 			if saveErr := embeddings.Save(cwd, newIndex); saveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to save index: %v\n", saveErr)
 			}
@@ -972,7 +972,7 @@ func main() {
 			}
 			// index stays nil — semantic_search falls back to grep.
 		} else {
-			fmt.Fprintf(os.Stderr, "\rIndexing repo... %d files done.\n", len(newIndex.FileHashes))
+			fmt.Fprintf(os.Stderr, "\rIndexing repo... %d files done.                    \n", len(newIndex.FileHashes))
 			// TODO: revisit embeddings.json sharding (see existing TODO in Save()) if
 			// benchmarking on 10k+ file repos reveals this is a bottleneck.
 			if saveErr := embeddings.Save(cwd, newIndex); saveErr != nil {
