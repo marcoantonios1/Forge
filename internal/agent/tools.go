@@ -55,6 +55,9 @@ func NewRegistry(
 	register(&tools.GitCommitTool{})
 	register(&tools.GitPushTool{})
 	register(tools.NewRunCommandTool(emitter, sessionID))
+	register(&tools.SymbolLookupTool{})
+	register(tools.NewDependencyGraphTool())
+	register(&tools.ASTParseTool{})
 
 	// Default root for all tools that accept it.
 	_ = root // callers inject "root" into args per-call

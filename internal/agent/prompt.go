@@ -45,6 +45,23 @@ Available tools and their required arguments:
     ARGS: {"command": "<shell command>", "root": "<repo root>",
            "timeout_seconds": <int, optional, default 30>}
 
+  symbol_lookup
+    ARGS: {"name": "<symbol name>"}
+    Finds all definitions and references of a symbol across the repo.
+    Use this instead of search_code when you need to know where something
+    is actually defined vs. merely mentioned in text/comments.
+
+  dependency_graph
+    ARGS: {"file": "<relative path>, optional"}
+    Maps import relationships. With "file": returns what it imports and what
+    imports it. Without "file": returns a repo-wide summary only.
+
+  ast_parse
+    ARGS: {"path": "<relative path>"}
+    Returns top-level declarations (functions, types, methods, classes) in a
+    file without reading the full source. Use this to get an overview of a
+    file's structure before deciding whether to read_file it in full.
+
 When you need to use a tool, do NOT emit TOOL:/ARGS: yourself. Instead, state
 your intent in natural language:
   INTENT: <one sentence describing what you want to do and why, e.g.
@@ -122,6 +139,9 @@ git_status        ARGS: {}
 git_diff          ARGS: {"staged": <bool, optional>}
 git_log           ARGS: {"limit": <int, optional>}
 run_command       ARGS: {"command": "<shell command>", "timeout_seconds": <int, optional>}
+symbol_lookup     ARGS: {"name": "<symbol name>"}
+dependency_graph  ARGS: {"file": "<relative path, optional>"}
+ast_parse         ARGS: {"path": "<relative path>"}
 `
 // Keep this list in sync with the tools actually registered in agent.Registry.
 // git_commit and git_push are intentionally omitted — they are not agent-callable.
