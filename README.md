@@ -106,8 +106,8 @@ Copy `.env.example` to `.env` and edit as needed. Actual environment variables a
 | Variable | Default | Description |
 |---|---|---|
 | `FORGE_COMPILER_MAX_TOKENS` | `8000` | |
-| `FORGE_PLANNER_MAX_TOKENS` | `32000` | |
-| `FORGE_CODER_MAX_TOKENS` | `32000` | |
+| `FORGE_PLANNER_MAX_TOKENS` | `16000` | |
+| `FORGE_CODER_MAX_TOKENS` | `16000` | |
 | `FORGE_COMPACTOR_MAX_TOKENS` | `8000` | |
 | `FORGE_TOOL_CALLER_MAX_TOKENS` | `4000` | |
 | `FORGE_EMBEDDING_MAX_TOKENS` | `8000` | |
@@ -136,12 +136,15 @@ forge [--mode=safe|balanced|autonomous] [--resume] [--debug] [--yes] [--allowed-
 | `--yes` | Approve all patches and tool permissions without prompting (forces autonomous behaviour) |
 | `--allowed-tools` | Comma-separated tool categories to pre-approve for the session: `read`, `git_read`, `git_write`, `run`, `patch`, or `all` |
 | `--allow-main-commit` | Allow committing directly to `main`/`master` instead of branching off (unsafe) |
+| `--timeline` | Print a readable execution timeline table after each task completes |
 
 REPL-only commands:
 
 | Command | Description |
 |---|---|
 | `undo` | Reverts the most recently applied patch set (deletes files it created, restores files it edited) |
+| `queue "<task>"` | Enqueues a task to run automatically after the current one finishes |
+| `queue list` | Prints the tasks currently waiting in the queue |
 
 Press **Ctrl+C** to cancel the task currently running and return to the prompt; press it again with no task running (or twice within one second) to exit. **Ctrl+D** exits cleanly at any time.
 
@@ -156,10 +159,11 @@ Runs one task non-interactively (always autonomous — no prompts), prints a res
 ### Subcommands
 
 ```bash
-forge init             # generate a starter forge.md from filesystem heuristics
-forge memory show      # print the current session memory
-forge memory clear     # wipe the memory for this repo
-forge sessions list    # list the last saved session for every known repo
+forge init                        # generate a starter forge.md from filesystem heuristics
+forge memory show                 # print the current session memory
+forge memory clear                # wipe the memory for this repo
+forge sessions list               # list the last saved session for every known repo
+forge logs show <session-id>      # pretty-print the audit log for an autonomous session
 ```
 
 ### forge.md
@@ -224,8 +228,12 @@ Allow? [y]es / [n]o / [a]ll session for run
 ## Tools available to the agent
 
 - `read_file`, `list_files`, `search_code`, `semantic_search` — repo exploration
+- `write_file` — creates or fully replaces a file; prefer patch blocks for targeted edits to existing files
 - `git_status`, `git_diff`, `git_log` — read-only repo state
 - `run_command` — runs a build/test/lint command in the repo root, streaming output live; rejects destructive prefixes (`rm`, `dd`, `chmod -R 777 /`, etc.) before execution
+- `symbol_lookup` — finds all definitions and references of a named symbol across the repo (Go AST; regex heuristics for TypeScript/Python)
+- `dependency_graph` — maps import relationships for a file or the whole repo
+- `ast_parse` — returns top-level declarations in a file without reading the full source
 - Patch blocks (`FORGE_PATCH_BEGIN`/`END`) — unified diffs, including brand-new files (`--- /dev/null`)
 
 `git_branch`, `git_checkout`, `git_stash`, `git_pull`, `git_commit`, and `git_push` are registered for Forge's own internal use (pre-task repo prep and the post-task git workflow) — they're not in the agent's system prompt, so the agent itself never calls them directly.
@@ -258,6 +266,8 @@ internal/
     codeintel/         symbol lookup, dependency graph, and lightweight AST
                        parsing for Go/TypeScript/Python
     costguard/         OpenAI-compatible HTTP client with retry/backoff
+    timeline/          execution timeline collector and post-task table renderer;
+                       also reads autonomous-mode audit logs for `forge logs show`
     agent/             control loop, tool registry, system prompt, clarification,
                        reviewer, stuck detector
     reposummary/       repo structure summariser with file-list-hash cache

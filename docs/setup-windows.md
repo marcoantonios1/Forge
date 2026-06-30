@@ -4,7 +4,7 @@
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.26+
 - A running [Costguard](https://github.com/marcoantonios1/costguard) instance
 - A model served via Costguard (Ollama, Anthropic, OpenAI, etc.)
 
