@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.26+
 - A running [Costguard](https://github.com/marcoantonios1/costguard) instance
 - A model served via Costguard (Ollama, Anthropic, OpenAI, etc.)
 
@@ -12,7 +12,7 @@ If Go is not already installed:
 
 ```bash
 # Download the latest Go tarball from https://go.dev/dl/ then:
-sudo tar -C /usr/local -xzf go1.22.*.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.*.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 go version
