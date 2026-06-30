@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1065,8 +1066,11 @@ func main() {
 	// 8. Signal handling. Ctrl+C cancels a running task without exiting; with
 	// no task running it exits. A second Ctrl+C within 1 second always exits.
 	var (
-		taskCancel context.CancelFunc
-		taskMu     sync.Mutex
+		taskCancel  context.CancelFunc
+		taskMu      sync.Mutex
+		taskQueue   []string // pending raw task strings, FIFO
+		queueMu     sync.Mutex
+		taskRunning atomic.Bool // true while a task is actively executing
 	)
 
 	sigs := make(chan os.Signal, 1)
@@ -1087,64 +1091,22 @@ func main() {
 			if cancel != nil {
 				cancel()
 			} else {
+				// TODO: consider warning "N tasks still queued — exit anyway? [y/n]"
+				// on Ctrl+C at the idle prompt if the queue is non-empty, rather than
+				// exiting silently and losing queued tasks.
 				fmt.Println("\nbye.")
 				os.Exit(0)
 			}
 		}
 	}()
 
-	// REPL
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Print("> ")
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Println("\nbye.")
-			return
-		}
-		// Drain any remaining buffered data so multi-line pastes are captured whole.
-		// When the user pastes, all lines arrive in the buffer simultaneously;
-		// ReadString stops at the first '\n', so we accumulate the rest here.
-		for reader.Buffered() > 0 {
-			more, readErr := reader.ReadString('\n')
-			line += more
-			if readErr != nil {
-				break
-			}
-		}
-		line = strings.TrimRight(line, "\r\n")
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		// Multiline mode: "<<<" (alone or as prefix) starts accumulation; a lone "." line submits.
-		if strings.HasPrefix(strings.TrimSpace(line), "<<<") {
-			var parts []string
-			if first := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "<<<")); first != "" {
-				parts = append(parts, first)
-			}
-			for {
-				fmt.Print("... ")
-				ml, mlErr := reader.ReadString('\n')
-				if mlErr != nil {
-					break
-				}
-				ml = strings.TrimRight(ml, "\r\n")
-				if ml == "." {
-					break
-				}
-				parts = append(parts, ml)
-			}
-			line = strings.Join(parts, "\n")
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
-		}
-
-		if strings.TrimSpace(line) == "undo" {
-			handleUndo(cwd, sessionHistory, renderer)
-			continue
-		}
+	// runQueuedTask runs a single task to completion, then drains and runs any
+	// tasks that were enqueued while it was running before returning control to
+	// the REPL's select loop.
+	var runQueuedTask func(string)
+	runQueuedTask = func(line string) {
+		taskRunning.Store(true)
+		defer taskRunning.Store(false)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		taskMu.Lock()
@@ -1152,8 +1114,8 @@ func main() {
 		taskMu.Unlock()
 
 		runErr := runTask(ctx, line, cwd, cfg, client, comp, renderer,
-			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag, embedClient, index, mem,
-			sessionMode, emitter)
+			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag,
+			embedClient, index, mem, sessionMode, emitter)
 
 		if tc != nil {
 			rows := timeline.BuildRows(tc.Steps())
@@ -1170,6 +1132,8 @@ func main() {
 				// TODO: if the task had applied patches before cancellation,
 				// hint "run `undo` to revert applied patches" here.
 				fmt.Println("task cancelled")
+				// Cancelling the current task does NOT clear the queue —
+				// the next queued task still runs automatically.
 			} else {
 				var re *compiler.RejectionError
 				if errors.As(runErr, &re) {
@@ -1177,7 +1141,149 @@ func main() {
 				} else {
 					fmt.Fprintf(os.Stderr, "error: %s\n", runErr)
 				}
+				// Task failure also does not clear the queue — drain continues.
 			}
+		}
+
+		// Drain: if anything was enqueued during this task, run the next one
+		// immediately without waiting for a fresh prompt read.
+		queueMu.Lock()
+		var next string
+		hasNext := len(taskQueue) > 0
+		if hasNext {
+			next = taskQueue[0]
+			taskQueue = taskQueue[1:]
+		}
+		queueMu.Unlock()
+
+		if hasNext {
+			// TODO: suppress the background reader's "> " prompt print while a task
+			// is running, to avoid visual interleaving with the active task's
+			// renderer output; print exactly one "> " when the queue fully drains.
+			fmt.Printf("\nrunning next queued task (%d remaining)\n", len(taskQueue))
+			runQueuedTask(next)
+		}
+		// TODO: add `queue clear` and `queue remove <n>` commands for queue
+		// management beyond list/append.
+	}
+
+	// REPL — background goroutine reads stdin continuously so new lines can be
+	// received even while a task is running (they get enqueued rather than
+	// executed immediately). Multiline "<<<" / "." accumulation is handled here
+	// so a complete task string arrives on lineCh regardless of input method.
+	type inputLine struct {
+		text string
+		err  error
+	}
+	lineCh := make(chan inputLine)
+	reader := bufio.NewReader(os.Stdin)
+
+	go func() {
+		for {
+			// TODO: suppress this "> " while taskRunning is true, to avoid
+			// visual interleaving with the active task's renderer output.
+			fmt.Print("> ")
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				lineCh <- inputLine{err: err}
+				return
+			}
+			// Drain any remaining buffered data so multi-line pastes are captured whole.
+			for reader.Buffered() > 0 {
+				more, readErr := reader.ReadString('\n')
+				line += more
+				if readErr != nil {
+					break
+				}
+			}
+			line = strings.TrimRight(line, "\r\n")
+
+			// Multiline mode: "<<<" (alone or as prefix) starts accumulation; a lone "." line submits.
+			if strings.HasPrefix(strings.TrimSpace(line), "<<<") {
+				var parts []string
+				if first := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "<<<")); first != "" {
+					parts = append(parts, first)
+				}
+				for {
+					fmt.Print("... ")
+					ml, mlErr := reader.ReadString('\n')
+					if mlErr != nil {
+						break
+					}
+					ml = strings.TrimRight(ml, "\r\n")
+					if ml == "." {
+						break
+					}
+					parts = append(parts, ml)
+				}
+				line = strings.Join(parts, "\n")
+			}
+
+			lineCh <- inputLine{text: line}
+		}
+	}()
+
+	for {
+		select {
+		case in := <-lineCh:
+			if in.err != nil {
+				fmt.Println("\nbye.")
+				return
+			}
+			line := in.text
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+
+			if strings.TrimSpace(line) == "undo" {
+				if taskRunning.Load() {
+					fmt.Println("cannot undo while a task is running")
+					continue
+				}
+				handleUndo(cwd, sessionHistory, renderer)
+				continue
+			}
+
+			if strings.TrimSpace(line) == "queue list" {
+				queueMu.Lock()
+				if len(taskQueue) == 0 {
+					fmt.Println("queue is empty")
+				} else {
+					for i, t := range taskQueue {
+						fmt.Printf("%d. %s\n", i+1, t)
+					}
+				}
+				queueMu.Unlock()
+				continue
+			}
+
+			if strings.HasPrefix(strings.TrimSpace(line), "queue ") {
+				// Explicit `queue "<task>"` — strip prefix, enqueue regardless of run state.
+				queued := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "queue "))
+				queued = strings.Trim(queued, `"`)
+				if queued == "" {
+					fmt.Println(`usage: queue "<task description>"`)
+					continue
+				}
+				queueMu.Lock()
+				taskQueue = append(taskQueue, queued)
+				pos := len(taskQueue)
+				queueMu.Unlock()
+				fmt.Printf("queued (position %d)\n", pos)
+				continue
+			}
+
+			if taskRunning.Load() {
+				// A task is currently executing — enqueue instead of running now.
+				queueMu.Lock()
+				taskQueue = append(taskQueue, line)
+				pos := len(taskQueue)
+				queueMu.Unlock()
+				fmt.Printf("task in progress — queued (position %d)\n", pos)
+				continue
+			}
+
+			runQueuedTask(line)
 		}
 	}
 }
