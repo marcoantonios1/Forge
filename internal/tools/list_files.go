@@ -129,8 +129,24 @@ func (t *ListFilesTool) Run(_ context.Context, args map[string]any) (any, error)
 	return &ListFilesResult{Root: absRoot, Files: files, Count: len(files)}, nil
 }
 
+// loadGitignore reads ignore patterns from both .gitignore and .forgeignore
+// at root, merging them into one pattern list. .forgeignore uses identical
+// syntax to .gitignore and is checked IN ADDITION TO .gitignore, never
+// instead of it — a path matching either file's patterns is excluded.
+// TODO: if .gitignore negation patterns (!) are ever implemented, keep
+// .forgeignore negation support in lockstep rather than letting one gain
+// a feature the other lacks.
 func loadGitignore(root string) []string {
-	f, err := os.Open(filepath.Join(root, ".gitignore"))
+	var patterns []string
+	patterns = append(patterns, readIgnoreFile(filepath.Join(root, ".gitignore"))...)
+	patterns = append(patterns, readIgnoreFile(filepath.Join(root, ".forgeignore"))...)
+	return patterns
+}
+
+// readIgnoreFile parses one ignore-pattern file. Returns nil if the file
+// doesn't exist — absence of either file is not an error.
+func readIgnoreFile(path string) []string {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
@@ -144,7 +160,8 @@ func loadGitignore(root string) []string {
 			continue
 		}
 		if strings.HasPrefix(line, "!") {
-			// TODO: negation patterns are out of scope — skip silently.
+			// TODO: negation patterns are out of scope — skip silently,
+			// consistent with .gitignore handling.
 			continue
 		}
 		patterns = append(patterns, line)

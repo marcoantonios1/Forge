@@ -140,7 +140,7 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 		if buildErr != nil {
 			fmt.Fprintf(os.Stderr, "\nwarning: indexing failed: %v — semantic_search will fall back to grep\n", buildErr)
 		} else {
-			fmt.Fprintf(os.Stderr, "\rIndexing repo... %d files done.\n", len(newIndex.FileHashes))
+			fmt.Fprintf(os.Stderr, "\rIndexing repo... %d files done.                    \n", len(newIndex.FileHashes))
 			if saveErr := embeddings.Save(cwd, newIndex); saveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to save index: %v\n", saveErr)
 			}
@@ -891,9 +891,53 @@ func main() {
 		mem = &memory.Memory{Version: memory.CurrentVersion, TaskHistory: []memory.TaskHistoryEntry{}}
 	}
 
-	// 6c. Embedding index (skipped when FORGE_EMBEDDING_MODEL is unset).
+	// 6c. Signal handling — installed HERE, before embedding indexing, so that
+	// Ctrl+C during the (potentially slow) indexing step actually cancels it.
+	// Previously this block lived after indexing (step 8), which meant
+	// context.Background() had to be passed to Build() making Ctrl+C a no-op
+	// during startup. Fix: share taskCancel/taskMu between startup and the REPL
+	// loop; each phase sets taskCancel before its long-running work.
+	var (
+		taskCancel  context.CancelFunc
+		taskMu      sync.Mutex
+		taskQueue   []string // pending raw task strings, FIFO
+		queueMu     sync.Mutex
+		taskRunning atomic.Bool // true while a task is actively executing
+	)
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT)
+	go func() {
+		var lastSig time.Time
+		for range sigs {
+			if !lastSig.IsZero() && time.Since(lastSig) < time.Second {
+				fmt.Println("\nbye.")
+				os.Exit(0)
+			}
+			lastSig = time.Now()
+
+			taskMu.Lock()
+			cancel := taskCancel
+			taskMu.Unlock()
+
+			if cancel != nil {
+				cancel()
+			} else {
+				// TODO: consider warning "N tasks still queued — exit anyway? [y/n]"
+				// on Ctrl+C at the idle prompt if the queue is non-empty, rather than
+				// exiting silently and losing queued tasks.
+				fmt.Println("\nbye.")
+				os.Exit(0)
+			}
+		}
+	}()
+
+	// 6d. Embedding index (skipped when FORGE_EMBEDDING_MODEL is unset).
 	// TODO: print a one-time hint when EmbeddingModel is unset:
 	// "Set FORGE_EMBEDDING_MODEL to enable semantic search across the repo"
+	// TODO: add a `make bench-largerepo` target that generates a synthetic
+	// 10k-file fixture and times list_files/search_code/startup, for
+	// tracking regressions over time without making it a hard CI gate.
 	var embedClient *embeddings.EmbedClient
 	var index *embeddings.Index
 	if cfg.EmbeddingModel != "" {
@@ -902,17 +946,35 @@ func main() {
 		if loadErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to load existing index: %v\n", loadErr)
 		}
-		fmt.Fprint(os.Stderr, "Indexing repo...")
-		// Build() respects ctx cancellation; use Background here since the main
-		// signal handler is installed after startup completes.
-		newIndex, buildErr := embeddings.Build(context.Background(), cwd, embedClient, existing,
+		startupCtx, startupCancel := context.WithCancel(context.Background())
+		taskMu.Lock()
+		taskCancel = startupCancel // indexing counts as "a running operation" for Ctrl+C
+		taskMu.Unlock()
+
+		fmt.Fprint(os.Stderr, "Indexing repo... (Ctrl+C to cancel)")
+		newIndex, buildErr := embeddings.Build(startupCtx, cwd, embedClient, existing,
 			func(current, total int, path string) {
-				fmt.Fprintf(os.Stderr, "\rIndexing repo... %d/%d files", current, total)
+				fmt.Fprintf(os.Stderr, "\rIndexing repo... %d/%d files (Ctrl+C to cancel)", current, total)
 			})
+
+		taskMu.Lock()
+		taskCancel = nil
+		taskMu.Unlock()
+		startupCancel() // release resources; safe to call even if already cancelled
+
 		if buildErr != nil {
-			fmt.Fprintf(os.Stderr, "\nwarning: indexing failed: %v — semantic_search will fall back to grep\n", buildErr)
+			if errors.Is(buildErr, context.Canceled) {
+				fmt.Fprintln(os.Stderr, "\nindexing cancelled — continuing without semantic search for this session")
+				// Do NOT save — a partial cancelled build must never be persisted.
+				// The existing index (if any) remains untouched on disk.
+			} else {
+				fmt.Fprintf(os.Stderr, "\nwarning: indexing failed: %v — semantic_search will fall back to grep\n", buildErr)
+			}
+			// index stays nil — semantic_search falls back to grep.
 		} else {
-			fmt.Fprintf(os.Stderr, "\rIndexing repo... %d files done.\n", len(newIndex.FileHashes))
+			fmt.Fprintf(os.Stderr, "\rIndexing repo... %d files done.                    \n", len(newIndex.FileHashes))
+			// TODO: revisit embeddings.json sharding (see existing TODO in Save()) if
+			// benchmarking on 10k+ file repos reveals this is a bottleneck.
 			if saveErr := embeddings.Save(cwd, newIndex); saveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to save index: %v\n", saveErr)
 			}
@@ -1063,42 +1125,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	// 8. Signal handling. Ctrl+C cancels a running task without exiting; with
-	// no task running it exits. A second Ctrl+C within 1 second always exits.
-	var (
-		taskCancel  context.CancelFunc
-		taskMu      sync.Mutex
-		taskQueue   []string // pending raw task strings, FIFO
-		queueMu     sync.Mutex
-		taskRunning atomic.Bool // true while a task is actively executing
-	)
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT)
-	go func() {
-		var lastSig time.Time
-		for range sigs {
-			if !lastSig.IsZero() && time.Since(lastSig) < time.Second {
-				fmt.Println("\nbye.")
-				os.Exit(0)
-			}
-			lastSig = time.Now()
-
-			taskMu.Lock()
-			cancel := taskCancel
-			taskMu.Unlock()
-
-			if cancel != nil {
-				cancel()
-			} else {
-				// TODO: consider warning "N tasks still queued — exit anyway? [y/n]"
-				// on Ctrl+C at the idle prompt if the queue is non-empty, rather than
-				// exiting silently and losing queued tasks.
-				fmt.Println("\nbye.")
-				os.Exit(0)
-			}
-		}
-	}()
+	// 8. REPL task runner — signal handling and queue state were moved to step
+	// 6c so they cover embedding indexing too. Variables (taskCancel, taskMu,
+	// taskQueue, queueMu, taskRunning) are already declared above.
 
 	// runQueuedTask runs a single task to completion, then drains and runs any
 	// tasks that were enqueued while it was running before returning control to

@@ -167,10 +167,22 @@ func Build(
 	return newIndex, nil
 }
 
-// loadIgnorePatterns reads .gitignore from root. Inlined here to avoid
-// importing internal/tools (which imports this package — would create a cycle).
+// loadIgnorePatterns reads ignore patterns from both .gitignore and
+// .forgeignore at root, merged. Duplicated from internal/tools/list_files.go
+// (see that file's comment) to avoid an import cycle — kept in sync manually,
+// consistent with this package's existing pattern.
+// TODO: if .gitignore negation patterns (!) are ever implemented, keep
+// .forgeignore negation support in lockstep rather than letting one gain
+// a feature the other lacks.
 func loadIgnorePatterns(root string) []string {
-	f, err := os.Open(filepath.Join(root, ".gitignore"))
+	var patterns []string
+	patterns = append(patterns, readEmbeddingsIgnoreFile(filepath.Join(root, ".gitignore"))...)
+	patterns = append(patterns, readEmbeddingsIgnoreFile(filepath.Join(root, ".forgeignore"))...)
+	return patterns
+}
+
+func readEmbeddingsIgnoreFile(path string) []string {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
