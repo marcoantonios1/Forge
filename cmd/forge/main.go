@@ -195,6 +195,12 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 	// 8. Run the agent.
 	runErr := ag.Run(ctx, ac)
 
+	// Print timeline after agent finishes (stderr — keep stdout clean for --output json).
+	if tc != nil {
+		rows := timeline.BuildRows(tc.Steps())
+		timeline.RenderTable(os.Stderr, rows)
+	}
+
 	// Post-task git workflow (headless always auto-commits).
 	if runErr == nil && ac.Patches.Len() > 0 {
 		if err := runGitWorkflow(ctx, ac, registry, emitter, true); err != nil {
@@ -767,6 +773,31 @@ func runMemoryCommand(args []string) int {
 	}
 }
 
+func runLogsCommand(args []string) int {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(args) < 2 || args[0] != "show" {
+		fmt.Fprintln(os.Stderr, "usage: forge logs show <session-id>")
+		return 2
+	}
+	sessionID := args[1]
+	path := timeline.LogPath(cwd, sessionID)
+	rows, err := timeline.ReadAuditLog(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "logs: %v\n", err)
+		return 1
+	}
+	if len(rows) == 0 {
+		fmt.Println("no log entries found")
+		return 0
+	}
+	timeline.RenderTable(os.Stdout, rows)
+	return 0
+}
+
 func runSessionsCommand(args []string) int {
 	// TODO: add `forge sessions clear` / `forge sessions clear <repo>` mirroring
 	// `forge memory clear`.
@@ -801,6 +832,10 @@ func main() {
 
 	if flag.NArg() > 0 && flag.Arg(0) == "memory" {
 		os.Exit(runMemoryCommand(flag.Args()[1:]))
+	}
+
+	if flag.NArg() > 0 && flag.Arg(0) == "logs" {
+		os.Exit(runLogsCommand(flag.Args()[1:]))
 	}
 
 	if flag.NArg() > 0 && flag.Arg(0) == "sessions" {
@@ -893,9 +928,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "warning: audit logging disabled: %v\n", auditErr)
 	}
 	defer auditLogger.Close()
+	var tc *timeline.TimelineCollector
 	var emitter events.Emitter = renderer
+	if *timelineFlag {
+		tc = timeline.NewTimelineCollector()
+		emitter = events.Multi(renderer, tc)
+	}
 	if sessionMode == mode.ModeAutonomous {
-		emitter = &mode.EmitterTap{Inner: renderer, Audit: auditLogger}
+		emitter = &mode.EmitterTap{Inner: emitter, Audit: auditLogger}
 	}
 
 	fmt.Printf("Forge — session %s [%s]\n", id, sessionMode)
@@ -1114,6 +1154,11 @@ func main() {
 		runErr := runTask(ctx, line, cwd, cfg, client, comp, renderer,
 			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag, embedClient, index, mem,
 			sessionMode, emitter)
+
+		if tc != nil {
+			rows := timeline.BuildRows(tc.Steps())
+			timeline.RenderTable(os.Stdout, rows)
+		}
 
 		cancel()
 		taskMu.Lock()
