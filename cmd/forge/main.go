@@ -32,12 +32,14 @@ import (
 	"github.com/marcoantonios1/Forge/internal/patch"
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 	"github.com/marcoantonios1/Forge/internal/session"
+	"github.com/marcoantonios1/Forge/internal/timeline"
 	"github.com/marcoantonios1/Forge/internal/tools"
 	"github.com/marcoantonios1/Forge/internal/ui"
 )
 
 var (
 	debugFlag        = flag.Bool("debug", false, "enable debug event output")
+	timelineFlag     = flag.Bool("timeline", false, "print a readable execution timeline after task completion")
 	printFlag        = flag.Bool("print", false, "run a task non-interactively and exit")
 	outputFlag       = flag.String("output", "text", "output format in --print mode: text or json")
 	yesFlag          = flag.Bool("yes", false, "approve all patches without prompting")
@@ -81,6 +83,11 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 	if debug {
 		debugRenderer := ui.New(os.Stderr, ui.ModeDebug)
 		emitter = events.Multi(renderer, debugRenderer)
+	}
+	var tc *timeline.TimelineCollector
+	if *timelineFlag {
+		tc = timeline.NewTimelineCollector()
+		emitter = events.Multi(emitter, tc)
 	}
 	auditLogger, auditErr := mode.NewAuditLogger(cwd, sessionID, sessionMode)
 	if auditErr != nil {
