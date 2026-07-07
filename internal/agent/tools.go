@@ -8,6 +8,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/confirm"
 	"github.com/marcoantonios1/Forge/internal/embeddings"
 	"github.com/marcoantonios1/Forge/internal/events"
+	"github.com/marcoantonios1/Forge/internal/mcp"
 	"github.com/marcoantonios1/Forge/internal/tools"
 )
 
@@ -26,6 +27,7 @@ func NewRegistry(
 	gate *confirm.PermissionGate,
 	embedClient *embeddings.EmbedClient,
 	index *embeddings.Index,
+	mcpClients []mcp.Client, // nil or empty slice if no MCP servers configured
 ) *Registry {
 	reg := &Registry{
 		runners: make(map[string]*tools.ToolRunner),
@@ -58,6 +60,13 @@ func NewRegistry(
 	register(&tools.SymbolLookupTool{})
 	register(tools.NewDependencyGraphTool())
 	register(&tools.ASTParseTool{})
+
+	// Register each MCP tool as an MCPToolBridge.
+	for _, client := range mcpClients {
+		for _, t := range client.ListTools() {
+			register(tools.NewMCPToolBridge(client.ServerName(), t, client))
+		}
+	}
 
 	// Default root for all tools that accept it.
 	_ = root // callers inject "root" into args per-call

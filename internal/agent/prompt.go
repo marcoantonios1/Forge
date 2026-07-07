@@ -3,9 +3,11 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/marcoantonios1/Forge/internal/compiler"
 	"github.com/marcoantonios1/Forge/internal/costguard"
+	"github.com/marcoantonios1/Forge/internal/mcp"
 	"github.com/marcoantonios1/Forge/internal/memory"
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
 )
@@ -149,13 +151,35 @@ symbol_lookup     ARGS: {"name": "<symbol name>"}
 dependency_graph  ARGS: {"file": "<relative path, optional>"}
 ast_parse         ARGS: {"path": "<relative path>"}
 `
+
 // Keep this list in sync with the tools actually registered in agent.Registry.
 // git_commit and git_push are intentionally omitted — they are not agent-callable.
 
+// MCPToolsBlock returns a string describing all MCP tools from connected
+// clients, to be appended to agentSystemPrompt's tool list at session
+// start. Returns "" if clients is empty.
+func MCPToolsBlock(clients []mcp.Client) string {
+	if len(clients) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\nMCP server tools (call these like any other tool):\n")
+	for _, client := range clients {
+		for _, t := range client.ListTools() {
+			name := client.ServerName() + "__" + t.Name
+			sb.WriteString(fmt.Sprintf("  %-30s — %s\n", name, t.Description))
+		}
+	}
+	return sb.String()
+}
+
 // SystemMessage builds the system message with forge.md first (highest precedence),
 // memory second (inferred context), and the base agent prompt last.
-func SystemMessage(cfg *projectconfig.ProjectConfig, mem *memory.Memory) costguard.Message {
+func SystemMessage(cfg *projectconfig.ProjectConfig, mem *memory.Memory, mcpClients []mcp.Client) costguard.Message {
 	content := agentSystemPrompt
+	if len(mcpClients) > 0 {
+		content += "\n" + MCPToolsBlock(mcpClients)
+	}
 	if mem != nil {
 		if block := mem.Inject(); block != "" {
 			content = block + "\n\n" + content

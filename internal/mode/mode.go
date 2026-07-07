@@ -30,15 +30,21 @@ func Parse(raw string) SessionMode {
 // PreApprovedCategories returns the set of tool categories this mode
 // auto-approves, to be merged with whatever --allowed-tools supplies.
 //   - safe:       none
-//   - balanced:   read, git_read
-//   - autonomous: read, git_read, patch, git_write, run (effectively "all")
+//   - balanced:   read, git_read, mcp
+//   - autonomous: read, git_read, patch, git_write, run, mcp (effectively "all")
+//
+// Balanced mode auto-approves "mcp" because MCP tools are external services,
+// conceptually similar to read-only data fetching in typical use.
+// TODO: expose MCP tool InputSchema's write-vs-read nature so the permission
+// gate can promote mcp-write calls to the "run" category (which balanced mode
+// still prompts for) rather than blanket-approving all mcp calls here.
 //
 // TODO: balanced mode's categories could be made configurable via env/config
 // rather than hard-coded here.
 func (m SessionMode) PreApprovedCategories() map[string]bool {
 	switch m {
 	case ModeBalanced:
-		return map[string]bool{"read": true, "git_read": true}
+		return map[string]bool{"read": true, "git_read": true, "mcp": true}
 	case ModeAutonomous:
 		return map[string]bool{
 			"read":      true,
@@ -46,6 +52,7 @@ func (m SessionMode) PreApprovedCategories() map[string]bool {
 			"patch":     true,
 			"git_write": true,
 			"run":       true,
+			"mcp":       true,
 		}
 	default:
 		return map[string]bool{}

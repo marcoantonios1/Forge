@@ -246,6 +246,22 @@ func formatCommandFinished(e events.Event, colour bool) string {
 	return Colour(fmt.Sprintf("  %s  done  exit %d  (%dms)", g, exitCode, durationMs), Red, colour)
 }
 
+func formatMCPConnected(e events.Event, colour bool) string {
+	server := str(e.Payload, "server")
+	toolCount := num(e.Payload, "tool_count")
+	g := glyph("⬡", "o", colour)
+	label := Colour(server, Cyan, colour)
+	return fmt.Sprintf("  %s  MCP  %s  (%d tools)", g, label, toolCount)
+}
+
+func formatMCPError(e events.Event, colour bool) string {
+	server := str(e.Payload, "server")
+	reason := str(e.Payload, "reason")
+	g := glyph("⬡", "o", colour)
+	label := Colour("MCP", Red, colour)
+	return fmt.Sprintf("  %s  %s  %s  error: %s", g, label, server, reason)
+}
+
 func extractStringSlice(v any) []string {
 	switch s := v.(type) {
 	case []string:
