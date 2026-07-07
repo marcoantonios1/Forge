@@ -95,6 +95,10 @@ func (r *Renderer) Emit(e events.Event) {
 		line = formatCommandFinished(e, r.colour)
 	case events.EventTaskFailed:
 		line = formatTaskFailed(e, r.colour)
+	case events.EventMCPConnected:
+		line = formatMCPConnected(e, r.colour)
+	case events.EventMCPError:
+		line = formatMCPError(e, r.colour)
 	case events.EventConfirmDecision:
 		decision, _ := e.Payload["decision"].(string)
 		files := extractStringSlice(e.Payload["files"])
