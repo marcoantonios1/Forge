@@ -15,6 +15,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/compiler"
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
+	"github.com/marcoantonios1/Forge/internal/mcp"
 	"github.com/marcoantonios1/Forge/internal/patch"
 	"github.com/marcoantonios1/Forge/internal/reposummary"
 	"github.com/marcoantonios1/Forge/internal/tools"
@@ -38,11 +39,11 @@ const (
 // import internal/config (consistent with how model names are already passed
 // as plain strings from main.go rather than as a config.Config reference).
 type ModelLimits struct {
-	CompilerMaxTokens   int
-	PlannerMaxTokens    int
-	CoderMaxTokens      int
-	ToolCallerMaxTokens int
-	CompactorMaxTokens  int
+	CompilerMaxTokens     int
+	PlannerMaxTokens      int
+	CoderMaxTokens        int
+	ToolCallerMaxTokens   int
+	CompactorMaxTokens    int
 	ReviewerMaxTokens     int
 	ReviewerContextTokens int
 	EmbeddingMaxTokens    int
@@ -193,17 +194,19 @@ type Agent struct {
 	comp       *compiler.Compiler // nil = clarification disabled (headless)
 	clarifyIn  io.Reader          // nil = clarification disabled
 	clarifyOut io.Writer          // nil = clarification disabled
+	mcpClients []mcp.Client       // nil or empty slice if no MCP servers configured
 }
 
 func New(
-	cfg        Config,
-	client     *costguard.Client,
-	registry   *Registry,
-	emitter    events.Emitter,
-	patcher    PatchConfirmer,
-	comp       *compiler.Compiler,
-	clarifyIn  io.Reader,
+	cfg Config,
+	client *costguard.Client,
+	registry *Registry,
+	emitter events.Emitter,
+	patcher PatchConfirmer,
+	comp *compiler.Compiler,
+	clarifyIn io.Reader,
 	clarifyOut io.Writer,
+	mcpClients []mcp.Client,
 ) *Agent {
 	if cfg.StuckAfterIterations <= 0 {
 		cfg.StuckAfterIterations = defaultStuckAfter
@@ -217,6 +220,7 @@ func New(
 		comp:       comp,
 		clarifyIn:  clarifyIn,
 		clarifyOut: clarifyOut,
+		mcpClients: mcpClients,
 	}
 }
 
@@ -457,7 +461,7 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 
 	// Seed history with system + task messages.
 	baseMessages := []costguard.Message{
-		SystemMessage(ac.ProjectConfig, ac.Memory),
+		SystemMessage(ac.ProjectConfig, ac.Memory, a.mcpClients),
 	}
 	if repoSummary != "" {
 		baseMessages = append(baseMessages, RepoSummaryMessage(repoSummary))
@@ -932,7 +936,7 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 	plannerModel := a.cfg.selectModel(RolePlanner)
 	a.logCall(ac, RolePlanner, plannerModel)
 	clarifyMsgs := []costguard.Message{
-		SystemMessage(ac.ProjectConfig, ac.Memory),
+		SystemMessage(ac.ProjectConfig, ac.Memory, a.mcpClients),
 		TaskMessage(ac.Task),
 		{Role: "user", Content: "Should you ask a clarifying question before starting? " +
 			"If yes, emit FORGE_CLARIFY: <one specific question>. " +
@@ -1031,8 +1035,8 @@ func (a *Agent) prepareRepo(ctx context.Context, ac *AgentContext) {
 	}
 	if status, ok := statusResult.(*tools.GitStatusResult); ok && !status.IsClean {
 		a.registry.DispatchDirect(ctx, ToolCall{ //nolint:errcheck
-			Name:  "git_stash",
-			Args:  map[string]any{"root": ac.Root, "action": "push", "message": "forge: auto-stash"},
+			Name: "git_stash",
+			Args: map[string]any{"root": ac.Root, "action": "push", "message": "forge: auto-stash"},
 		})
 		a.emitter.Emit(events.GitStashEvent(ac.SessionID, "push"))
 	}
@@ -1198,7 +1202,7 @@ func (a *Agent) retryToolCallFormat(
 		// reformat instruction as the latest turn. Constructed fresh — does not
 		// mutate ac.History.
 		messages = append(append([]costguard.Message{
-			SystemMessage(ac.ProjectConfig, ac.Memory),
+			SystemMessage(ac.ProjectConfig, ac.Memory, a.mcpClients),
 			TaskMessage(ac.Task),
 		}, ac.History...), reformatMsg)
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
 	"github.com/marcoantonios1/Forge/internal/forgeinit"
+	"github.com/marcoantonios1/Forge/internal/mcp"
 	"github.com/marcoantonios1/Forge/internal/mode"
 	"github.com/marcoantonios1/Forge/internal/patch"
 	"github.com/marcoantonios1/Forge/internal/projectconfig"
@@ -160,11 +161,16 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 		return 1
 	}
 
+	// 6e. MCP servers declared in forge.md [mcp] section (session-scoped: connect
+	// once, forward into the registry/agent below, close on return).
+	mcpClients := connectMCPServers(projectCfg, emitter, sessionID)
+	defer closeMCPClients(mcpClients)
+
 	// 7. Session history + agent setup.
 	sessionHistory := patch.NewPatchHistory()
 	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory, mem)
 
-	registry := agent.NewRegistry(cwd, emitter, sessionID, nil, embedClient, index) // headless: no permission gate
+	registry := agent.NewRegistry(cwd, emitter, sessionID, nil, embedClient, index, mcpClients) // headless: no permission gate
 	confirmer := confirm.AutoConfirmer{}                                             // always — no prompts in headless mode
 	agentCfg := agent.Config{
 		PlannerModel:          appCfg.PlannerModel,
@@ -191,7 +197,7 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 		AutoApply: true,
 		Debug:     debug,
 	}
-	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer, nil, nil, nil)
+	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer, nil, nil, nil, mcpClients)
 
 	// 8. Run the agent.
 	runErr := ag.Run(ctx, ac)
@@ -264,6 +270,50 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 		Iterations: ac.Iteration,
 	})
 	return exitCode
+}
+
+// connectMCPServers parses forge.md's [mcp] section and connects to each
+// declared MCP server, emitting an MCPConnectedEvent or MCPErrorEvent for
+// each one. Parse and connect failures are non-fatal — MCP support is
+// best-effort and a bad server entry must not block the rest of the session.
+// MCP clients are session-scoped: connected once here, forwarded as-is into
+// every task's registry/agent construction, and closed on exit.
+func connectMCPServers(projectCfg *projectconfig.ProjectConfig, emitter events.Emitter, sessionID string) []mcp.Client {
+	if projectCfg == nil || projectCfg.IsZero() {
+		return nil
+	}
+	servers, parseErr := mcp.ParseMCPServers(projectCfg.Raw)
+	if parseErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: mcp: parsing forge.md: %v\n", parseErr)
+	}
+	var clients []mcp.Client
+	for _, srv := range servers {
+		client, newErr := mcp.New(srv)
+		if newErr != nil {
+			emitter.Emit(events.MCPErrorEvent(sessionID, srv.Name, newErr.Error()))
+			fmt.Fprintf(os.Stderr, "warning: mcp: %v\n", newErr)
+			continue
+		}
+		connectCtx, connectCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		connectErr := client.Connect(connectCtx)
+		connectCancel()
+		if connectErr != nil {
+			emitter.Emit(events.MCPErrorEvent(sessionID, srv.Name, connectErr.Error()))
+			fmt.Fprintf(os.Stderr, "warning: mcp: connect %q: %v\n", srv.Name, connectErr)
+			continue
+		}
+		emitter.Emit(events.MCPConnectedEvent(sessionID, srv.Name, len(client.ListTools())))
+		clients = append(clients, client)
+	}
+	return clients
+}
+
+// closeMCPClients kills stdio subprocesses / releases HTTP clients so MCP
+// servers don't become orphans on exit. Safe to call with a nil/empty slice.
+func closeMCPClients(clients []mcp.Client) {
+	for _, c := range clients {
+		c.Close() //nolint:errcheck
+	}
 }
 
 func writeResult(format string, r headlessResult) {
@@ -351,6 +401,7 @@ func runTask(
 	mem *memory.Memory,
 	sessionMode mode.SessionMode,
 	emitter events.Emitter,
+	mcpClients []mcp.Client,
 ) error {
 	task, err := comp.Compile(ctx, line)
 	if err != nil {
@@ -417,8 +468,8 @@ func runTask(
 		preApproved,
 		interactive,
 	)
-	registry := agent.NewRegistry(cwd, emitter, sessionID, gate, embedClient, index)
-	a := agent.New(agentCfg, client, registry, emitter, confirmer, comp, os.Stdin, os.Stderr)
+	registry := agent.NewRegistry(cwd, emitter, sessionID, gate, embedClient, index, mcpClients)
+	a := agent.New(agentCfg, client, registry, emitter, confirmer, comp, os.Stdin, os.Stderr, mcpClients)
 	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory, mem)
 
 	if err := a.Run(ctx, ac); err != nil {
@@ -1006,6 +1057,12 @@ func main() {
 		fmt.Printf("Loaded forge.md from %s\n", projectCfg.Path)
 	}
 
+	// MCP servers declared in forge.md [mcp] section (session-scoped: connect
+	// once here, forward into every task's registry/agent construction below,
+	// close cleanly on exit so subprocesses don't become orphans).
+	mcpClients := connectMCPServers(projectCfg, emitter, id)
+	defer closeMCPClients(mcpClients)
+
 	// Session-scoped patch history so undo works across tasks.
 	sessionHistory := patch.NewPatchHistory()
 
@@ -1101,8 +1158,8 @@ func main() {
 			os.Stdin, os.Stderr, ui.IsTTY(os.Stdout), *debugFlag,
 			emitter, saved.SessionID, resumePreApproved, resumeInteractive,
 		)
-		resumeRegistry := agent.NewRegistry(cwd, emitter, saved.SessionID, resumeGate, embedClient, index)
-		resumeAgent := agent.New(resumeAgentCfg, client, resumeRegistry, emitter, resumeConfirmer, comp, os.Stdin, os.Stderr)
+		resumeRegistry := agent.NewRegistry(cwd, emitter, saved.SessionID, resumeGate, embedClient, index, mcpClients)
+		resumeAgent := agent.New(resumeAgentCfg, client, resumeRegistry, emitter, resumeConfirmer, comp, os.Stdin, os.Stderr, mcpClients)
 
 		runErr := resumeAgent.Run(resumeCtx, ac)
 		if runErr == nil && ac.Patches.Len() > 0 {
@@ -1144,7 +1201,7 @@ func main() {
 
 		runErr := runTask(ctx, line, cwd, cfg, client, comp, renderer,
 			sessionHistory, projectCfg, id, *yesFlag, *allowedToolsFlag, *debugFlag,
-			embedClient, index, mem, sessionMode, emitter)
+			embedClient, index, mem, sessionMode, emitter, mcpClients)
 
 		if tc != nil {
 			rows := timeline.BuildRows(tc.Steps())

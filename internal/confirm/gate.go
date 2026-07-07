@@ -24,20 +24,20 @@ var toolCategory = map[string]string{
 	"write_file":      "patch", // intercepted upstream in agent.go before Dispatch; this entry is a safety-net only
 	"search_code":     "read",
 	"semantic_search": "read",
-	"git_status":  "git_read",
-	"git_diff":    "git_read",
-	"git_log":     "git_read",
+	"git_status":      "git_read",
+	"git_diff":        "git_read",
+	"git_log":         "git_read",
 	// patch is handled by SafeConfirmer; not gated here.
-	"git_branch":   "git_write",
-	"git_checkout": "git_write",
-	"git_stash":    "git_write",
-	"git_pull":     "git_write",
-	"git_commit":   "git_write",
-	"git_push":     "git_write",
-	"run_command":     "run",
-	"symbol_lookup":   "read",
+	"git_branch":       "git_write",
+	"git_checkout":     "git_write",
+	"git_stash":        "git_write",
+	"git_pull":         "git_write",
+	"git_commit":       "git_write",
+	"git_push":         "git_write",
+	"run_command":      "run",
+	"symbol_lookup":    "read",
 	"dependency_graph": "read",
-	"ast_parse":       "read",
+	"ast_parse":        "read",
 }
 
 // allCategories is the complete set of known categories used by "all" expansion.
@@ -47,6 +47,25 @@ var allCategories = map[string]bool{
 	"patch":     true,
 	"git_write": true,
 	"run":       true,
+	"mcp":       true,
+}
+
+// categoryForTool returns the permission category for a tool name. Individual
+// MCP tool names follow the "<server>__<tool>" pattern rather than being
+// listed in toolCategory (the key space is dynamic, one entry per connected
+// MCP server's tools) — any name containing "__" is classified as "mcp".
+//
+// TODO: expose MCP tool InputSchema's write-vs-read nature so the permission
+// gate can promote mcp-write calls to the "run" category (which balanced mode
+// still prompts for) rather than blanket-approving all mcp calls in balanced.
+func categoryForTool(name string) string {
+	if cat, ok := toolCategory[name]; ok {
+		return cat
+	}
+	if strings.Contains(name, "__") {
+		return "mcp"
+	}
+	return "unknown"
 }
 
 // ParseAllowedTools splits a comma-separated string into a set of pre-approved
@@ -142,8 +161,8 @@ func (g *PermissionGate) Dispatch(ctx context.Context, call tools.ToolCall, inne
 		return inner.DispatchDirect(ctx, call)
 	}
 
-	category, known := toolCategory[call.Name]
-	if !known {
+	category := categoryForTool(call.Name)
+	if category == "unknown" {
 		// Unknown tool — forward; inner dispatcher handles the unknown-tool error.
 		return inner.DispatchDirect(ctx, call)
 	}

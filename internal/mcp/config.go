@@ -18,10 +18,10 @@ const (
 type MCPServer struct {
 	Name      string            `json:"name"`
 	Transport Transport         `json:"transport"` // "stdio" or "http"
-	Command   string            `json:"command"`    // for stdio: the executable to spawn
-	Args      []string          `json:"args"`       // for stdio: args to pass to Command
-	URL       string            `json:"url"`        // for http: the server's base URL
-	Env       map[string]string `json:"env"`        // environment overrides for the subprocess
+	Command   string            `json:"command"`   // for stdio: the executable to spawn
+	Args      []string          `json:"args"`      // for stdio: args to pass to Command
+	URL       string            `json:"url"`       // for http: the server's base URL
+	Env       map[string]string `json:"env"`       // environment overrides for the subprocess
 }
 
 // ParseMCPServers extracts the [mcp] section from raw forge.md content.
