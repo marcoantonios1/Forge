@@ -35,6 +35,9 @@ const (
 	EventCommandFinished EventType = "command.finished"
 
 	EventPatchReviewed EventType = "patch.reviewed"
+
+	EventMCPConnected EventType = "mcp.connected"
+	EventMCPError     EventType = "mcp.error"
 )
 
 type Event struct {
@@ -179,6 +182,32 @@ func CommandOutputEvent(sessionID, command, stream, line string) Event {
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 		Payload:   map[string]any{"session_id": sessionID, "command": command, "stream": stream, "line": line},
+	}
+}
+
+func MCPConnectedEvent(sessionID, serverName string, toolCount int) Event {
+	return Event{
+		Type:      EventMCPConnected,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload: map[string]any{
+			"session_id": sessionID,
+			"server":     serverName,
+			"tool_count": toolCount,
+		},
+	}
+}
+
+func MCPErrorEvent(sessionID, serverName, reason string) Event {
+	return Event{
+		Type:      EventMCPError,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload: map[string]any{
+			"session_id": sessionID,
+			"server":     serverName,
+			"reason":     reason,
+		},
 	}
 }
 
