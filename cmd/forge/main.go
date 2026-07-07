@@ -171,7 +171,7 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory, mem)
 
 	registry := agent.NewRegistry(cwd, emitter, sessionID, nil, embedClient, index, mcpClients) // headless: no permission gate
-	confirmer := confirm.AutoConfirmer{}                                             // always — no prompts in headless mode
+	confirmer := confirm.AutoConfirmer{}                                                        // always — no prompts in headless mode
 	agentCfg := agent.Config{
 		PlannerModel:          appCfg.PlannerModel,
 		CoderModel:            appCfg.CoderModel,
