@@ -3,6 +3,7 @@ package confirm
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -66,6 +67,21 @@ func categoryForTool(name string) string {
 		return "mcp"
 	}
 	return "unknown"
+}
+
+// extractMCPServerName parses the server name from an "mcp__<server>__<tool>"
+// tool name. Returns ("", false) if the name doesn't match the pattern.
+func extractMCPServerName(name string) (server string, ok bool) {
+	// Format: mcp__<server>__<tool> — split on "__" and take the middle segment.
+	if !strings.HasPrefix(name, "mcp__") {
+		return "", false
+	}
+	rest := strings.TrimPrefix(name, "mcp__")
+	parts := strings.SplitN(rest, "__", 2)
+	if len(parts) != 2 {
+		return "", false
+	}
+	return parts[0], true
 }
 
 // ParseAllowedTools splits a comma-separated string into a set of pre-approved
@@ -187,9 +203,32 @@ func (g *PermissionGate) Dispatch(ctx context.Context, call tools.ToolCall, inne
 	// of blocking forever on stdin.
 	reader := bufio.NewReader(g.in)
 	for {
-		toolLabel := ui.Colour(call.Name, ui.Cyan, g.colour)
-		catLabel := ui.Colour(category, ui.Yellow, g.colour)
-		fmt.Fprintf(g.out, "\n  ⚡ Tool: %s  Category: %s\n", toolLabel, catLabel)
+		if category == "mcp" {
+			// For MCP tools, show server name and full args so the user can
+			// evaluate the external side effect before approving.
+			serverName, _ := extractMCPServerName(call.Name)
+			// TODO: for large args (e.g. file content in write tools), truncate
+			// the JSON to ~200 chars with "..." rather than showing the full
+			// value in the confirmation prompt.
+			argsJSON, err := json.Marshal(call.Args)
+			var argsStr string
+			if err != nil {
+				argsStr = fmt.Sprintf("%v", call.Args)
+			} else {
+				argsStr = string(argsJSON)
+			}
+			toolLabel := ui.Colour(call.Name, ui.Cyan, g.colour)
+			serverLabel := ui.Colour(serverName, ui.Yellow, g.colour)
+			catLabel := ui.Colour(category, ui.Yellow, g.colour)
+			fmt.Fprintf(g.out, "\n  ⚡ MCP Tool: %s\n", toolLabel)
+			fmt.Fprintf(g.out, "     Server:   %s\n", serverLabel)
+			fmt.Fprintf(g.out, "     Args:     %s\n", argsStr)
+			fmt.Fprintf(g.out, "     Category: %s\n", catLabel)
+		} else {
+			toolLabel := ui.Colour(call.Name, ui.Cyan, g.colour)
+			catLabel := ui.Colour(category, ui.Yellow, g.colour)
+			fmt.Fprintf(g.out, "\n  ⚡ Tool: %s  Category: %s\n", toolLabel, catLabel)
+		}
 		fmt.Fprintf(g.out, "  Allow? [y]es / [n]o / [a]ll session for %s  ", category)
 
 		type readResult struct {
