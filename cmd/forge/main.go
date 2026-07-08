@@ -287,6 +287,7 @@ func connectMCPServers(projectCfg *projectconfig.ProjectConfig, emitter events.E
 	if parseErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: mcp: parsing forge.md: %v\n", parseErr)
 	}
+	servers = validateMCPServers(servers)
 	var clients []mcp.Client
 	for _, srv := range servers {
 		client, newErr := mcp.New(srv)
@@ -314,6 +315,74 @@ func connectMCPServers(projectCfg *projectconfig.ProjectConfig, emitter events.E
 func closeMCPClients(clients []mcp.Client) {
 	for _, c := range clients {
 		c.Close() //nolint:errcheck
+	}
+}
+
+// validateMCPServers checks each server's config for basic sanity before
+// Connect() is attempted — a missing executable or clearly wrong URL causes
+// a warning and removes the server from the list so it doesn't produce a
+// confusing error at Connect() time.
+func validateMCPServers(servers []mcp.MCPServer) []mcp.MCPServer {
+	var valid []mcp.MCPServer
+	for _, srv := range servers {
+		if err := validateMCPServer(srv); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: mcp server %q skipped: %v\n", srv.Name, err)
+			continue
+		}
+		valid = append(valid, srv)
+	}
+	return valid
+}
+
+func validateMCPServer(srv mcp.MCPServer) error {
+	switch srv.Transport {
+	case mcp.TransportStdio:
+		if srv.Command == "" {
+			return fmt.Errorf("stdio server requires a command")
+		}
+		// Split the command the same way stdio.go does (strings.Fields)
+		// and check the resulting executable.
+		parts := strings.Fields(srv.Command)
+		if len(parts) == 0 {
+			return fmt.Errorf("stdio server has empty command")
+		}
+		if _, err := exec.LookPath(parts[0]); err != nil {
+			return fmt.Errorf("executable %q not found on PATH: %w", parts[0], err)
+		}
+		return nil
+
+	case mcp.TransportHTTP:
+		if srv.URL == "" {
+			return fmt.Errorf("http server requires a url")
+		}
+		if !strings.HasPrefix(srv.URL, "http://") && !strings.HasPrefix(srv.URL, "https://") {
+			return fmt.Errorf("http server url must start with http:// or https://")
+		}
+		// Lightweight reachability check: HEAD request with a short timeout.
+		// Failure is a warning, not a hard error — the server might be on a VPN,
+		// in a container, or starting up; we still attempt Connect() after this.
+		checkCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(checkCtx, http.MethodHead, srv.URL, nil)
+		if err != nil {
+			// URL construction failed — that's a hard validation error.
+			return fmt.Errorf("invalid url %q: %w", srv.URL, err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			// Network error — warn but don't skip (server might start later).
+			fmt.Fprintf(os.Stderr, "warning: mcp server %q may be unreachable: %v\n", srv.Name, err)
+			return nil // not a hard failure
+		}
+		resp.Body.Close()
+		if resp.StatusCode >= 500 {
+			fmt.Fprintf(os.Stderr, "warning: mcp server %q returned %d — it may not be ready\n",
+				srv.Name, resp.StatusCode)
+		}
+		return nil
+
+	default:
+		return fmt.Errorf("unknown transport %q", srv.Transport)
 	}
 }
 

@@ -223,7 +223,64 @@ Beyond patch confirmation, individual tool calls are gated by category. In `supe
 Allow? [y]es / [n]o / [a]ll session for run
 ```
 
-`y` approves once, `a` approves the category for the rest of the session, `n` denies it. Categories: `read` (read_file/list_files/search_code), `git_read` (status/diff/log), `git_write`, and `run` (run_command). Pre-approve any subset up front with `--allowed-tools=read,git_read` or `--allowed-tools=all`. `autonomous` mode and `--yes` skip all prompts. Forge's own pre-task git context gathering and the post-task git workflow always bypass the gate — only tool calls the agent itself initiates are gated.
+`y` approves once, `a` approves the category for the rest of the session, `n` denies it. Categories: `read` (read_file/list_files/search_code), `git_read` (status/diff/log), `git_write`, `run` (run_command), and `mcp` (MCP-bridged tools — see below). Pre-approve any subset up front with `--allowed-tools=read,git_read` or `--allowed-tools=all`. `autonomous` mode and `--yes` skip all prompts. Forge's own pre-task git context gathering and the post-task git workflow always bypass the gate — only tool calls the agent itself initiates are gated.
+
+## MCP configuration
+
+Forge can connect to [MCP (Model Context Protocol)](https://modelcontextprotocol.io) servers to give the agent additional tools — browser automation, GitHub access, database queries, or any service with an MCP server.
+
+Servers are declared in `forge.md` under an `[mcp]` section using TOML array-of-tables syntax. Each `[[mcp.servers]]` block configures one server:
+
+```
+[[mcp.servers]]
+name = "filesystem"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allow"]
+
+[[mcp.servers]]
+name = "github"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env.GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_your_token_here"
+
+[[mcp.servers]]
+name = "playwright"
+transport = "stdio"
+command = "npx"
+args = ["@playwright/mcp@latest"]
+
+[[mcp.servers]]
+name = "my-local-server"
+transport = "http"
+url = "http://localhost:8081"
+```
+
+**Fields:**
+
+- `name` — unique server identifier; used to namespace tools as `mcp__<name>__<tool>`
+- `transport` — `stdio` (spawn a subprocess) or `http` (connect to a running server)
+- `command` — for `stdio`: the executable to run (e.g. `npx`, `node`, `python3`)
+- `args` — for `stdio`: arguments passed to the command
+- `url` — for `http`: base URL of the server
+- `env.KEY` — environment variable overrides passed to the subprocess
+
+Forge validates server configs at startup — missing executables and unreachable URLs produce a warning and the server is skipped, so Forge always starts even if an MCP server is misconfigured.
+
+`forge init` automatically suggests MCP server configs based on your repo contents (e.g. if Playwright is in `package.json`, a Playwright MCP block is added to the generated `forge.md`).
+
+In `safe` and `supervised` modes, the first call to any MCP tool prompts:
+
+```
+⚡ MCP Tool: mcp__filesystem__read_file
+   Server:   filesystem
+   Args:     {"path": "/some/file.txt"}
+   Category: mcp
+Allow? [y]es / [n]o / [a]ll session for mcp
+```
+
+In `balanced` and `autonomous` modes, MCP tools are auto-approved.
 
 ## Tools available to the agent
 
