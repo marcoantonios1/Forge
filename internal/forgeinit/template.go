@@ -35,5 +35,60 @@ func Render(d Detection) string {
 		sb.WriteString("docker: true\n")
 	}
 
+	// MCP servers section — always include a header so users discover the feature.
+	sb.WriteString("\n## MCP Servers\n")
+	sb.WriteString("# Connect Forge to external tools via MCP (Model Context Protocol).\n")
+	sb.WriteString("# Remove the leading '#' from a block below to enable a server.\n")
+	sb.WriteString("# Full format docs: see README.md ## MCP configuration\n\n")
+
+	if len(d.SuggestedMCPServers) > 0 {
+		for _, s := range d.SuggestedMCPServers {
+			// Active (uncommented) blocks for detected servers.
+			sb.WriteString("# ")
+			sb.WriteString(s.Comment)
+			sb.WriteString("\n")
+			sb.WriteString(s.Block)
+			sb.WriteString("\n\n")
+		}
+	} else {
+		// No servers detected — include commented-out examples for all three
+		// common servers so the user can uncomment the right one.
+		sb.WriteString(commentBlock(`[[mcp.servers]]
+name = "filesystem"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allow"]`))
+		sb.WriteString("\n\n")
+		sb.WriteString(commentBlock(`[[mcp.servers]]
+name = "github"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env.GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_your_token_here"`))
+		sb.WriteString("\n\n")
+		sb.WriteString(commentBlock(`[[mcp.servers]]
+name = "playwright"
+transport = "stdio"
+command = "npx"
+args = ["@playwright/mcp@latest"]`))
+		sb.WriteString("\n")
+	}
+
 	return sb.String()
+}
+
+// commentBlock prefixes every non-empty line in a multi-line block with "# ",
+// for use in forge.md template output where examples should be commented out.
+func commentBlock(block string) string {
+	var sb strings.Builder
+	for _, line := range strings.Split(block, "\n") {
+		if strings.TrimSpace(line) == "" {
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString("# ")
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
