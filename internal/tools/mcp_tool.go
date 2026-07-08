@@ -19,12 +19,13 @@ func NewMCPToolBridge(serverName string, tool mcp.MCPTool, client mcp.Client) *M
 	return &MCPToolBridge{serverName: serverName, tool: tool, client: client}
 }
 
-// Name returns the tool name prefixed with the server name to avoid collisions:
-// e.g. "filesystem__read_file" for tool "read_file" from server "filesystem".
-// The double-underscore separator is used so the tool-caller model can still
-// parse it as a single token without confusion.
+// Name returns the tool name with the mcp__ prefix + server name + __ + tool name,
+// e.g. "mcp__filesystem__read_file" for tool "read_file" from server "filesystem".
+// The "mcp__" prefix lets the agent and the permission gate identify any MCP-
+// bridged tool by a simple strings.HasPrefix check rather than requiring exact
+// map entries per connected server.
 func (b *MCPToolBridge) Name() string {
-	return b.serverName + "__" + b.tool.Name
+	return "mcp__" + b.serverName + "__" + b.tool.Name
 }
 
 func (b *MCPToolBridge) Run(ctx context.Context, args map[string]any) (any, error) {

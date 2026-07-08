@@ -51,9 +51,9 @@ var allCategories = map[string]bool{
 }
 
 // categoryForTool returns the permission category for a tool name. Individual
-// MCP tool names follow the "<server>__<tool>" pattern rather than being
+// MCP tool names follow the "mcp__<server>__<tool>" pattern rather than being
 // listed in toolCategory (the key space is dynamic, one entry per connected
-// MCP server's tools) — any name containing "__" is classified as "mcp".
+// MCP server's tools) — any name with the "mcp__" prefix is classified as "mcp".
 //
 // TODO: expose MCP tool InputSchema's write-vs-read nature so the permission
 // gate can promote mcp-write calls to the "run" category (which balanced mode
@@ -62,7 +62,7 @@ func categoryForTool(name string) string {
 	if cat, ok := toolCategory[name]; ok {
 		return cat
 	}
-	if strings.Contains(name, "__") {
+	if strings.HasPrefix(name, "mcp__") {
 		return "mcp"
 	}
 	return "unknown"
