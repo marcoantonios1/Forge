@@ -335,6 +335,8 @@ internal/
                        applier, undo history
     confirm/           AutoConfirmer, NullConfirmer, SafeConfirmer, PermissionGate
     embeddings/        embedding pipeline and semantic search index
+    mcp/               MCP client: forge.md [mcp] section parser, stdio/http
+                       transports, JSON-RPC tool discovery and invocation
     memory/            per-repo persistent memory (injects context into system prompt)
     events/            event types, Emitter interface, Multi fan-out
     ui/                terminal renderer, diff coloriser, TTY detection
