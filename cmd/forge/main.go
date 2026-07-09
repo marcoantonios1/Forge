@@ -1035,9 +1035,9 @@ func runStatsCommand(args []string) int {
 		return 1
 	}
 	req.Header.Set("Accept", "application/json")
-	// NOTE: no per-request API key — config.Config has no CostguardAPIKey
-	// field today (Costguard is unauthenticated/local in this codebase); add
-	// one here alongside a config.Config field if that changes.
+	if cfg.FeedbackAPIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.FeedbackAPIKey)
+	}
 	req.Header.Set("X-Costguard-Agent", "forge")
 
 	resp, err := http.DefaultClient.Do(req)
