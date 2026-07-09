@@ -586,6 +586,23 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 				SessionID: ac.SessionID,
 				Payload:   map[string]any{"session_id": ac.SessionID, "summary": summary, "iterations": ac.Iteration},
 			})
+			feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, feedback.TaskOutcome{
+				SessionID:       ac.SessionID,
+				TaskFingerprint: feedback.Fingerprint(ac.Task.RawInput),
+				Category:        string(ac.Task.Category),
+				Scope:           string(ac.Task.Scope),
+				Status:          "completed",
+				Summary:         summary,
+				FilesChanged:    filesChangedCount(ac),
+				Iterations:      ac.Iteration,
+				ReviewRetries:   ac.ReviewRetries,
+				UserAccepted:    !a.cfg.AutoApply, // AutoApply=true means autonomous (no user decision)
+				TotalTokensUsed: ac.TotalTokensUsed,
+				DurationMs:      time.Since(ac.StartedAt).Milliseconds(),
+				PlannerModel:    a.cfg.PlannerModel,
+				CoderModel:      a.cfg.CoderModel,
+				Timestamp:       time.Now(),
+			})
 			return nil
 
 		// b) FORGE_FAILED
@@ -597,7 +614,23 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 				SessionID: ac.SessionID,
 				Payload:   map[string]any{"session_id": ac.SessionID, "reason": reason, "iterations": ac.Iteration},
 			})
-			return fmt.Errorf("agent: task failed: %s", reason)
+			feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, feedback.TaskOutcome{
+				SessionID:       ac.SessionID,
+				TaskFingerprint: feedback.Fingerprint(ac.Task.RawInput),
+				Category:        string(ac.Task.Category),
+				Scope:           string(ac.Task.Scope),
+				Status:          "failed",
+				Summary:         reason,
+				FilesChanged:    0,
+				Iterations:      ac.Iteration,
+				ReviewRetries:   ac.ReviewRetries,
+				TotalTokensUsed: ac.TotalTokensUsed,
+				DurationMs:      time.Since(ac.StartedAt).Milliseconds(),
+				PlannerModel:    a.cfg.PlannerModel,
+				CoderModel:      a.cfg.CoderModel,
+				Timestamp:       time.Now(),
+			})
+			return &ErrTaskFailed{Reason: reason}
 
 		// c) FORGE_PATCH_BEGIN...FORGE_PATCH_END
 		case strings.Contains(response, "FORGE_PATCH_BEGIN"):
@@ -663,6 +696,51 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 			return err
 		}
 	}
+}
+
+// filesChangedCount returns the count of distinct, non-reverted patched files
+// across ac.Patches — used for the feedback payload's FilesChanged field.
+func filesChangedCount(ac *AgentContext) int {
+	seen := map[string]bool{}
+	count := 0
+	for _, rec := range ac.Patches.AllRecords() {
+		if !rec.Reverted {
+			for p := range rec.Originals {
+				if !seen[p] {
+					seen[p] = true
+					count++
+				}
+			}
+		}
+	}
+	return count
+}
+
+// PostTaskError is called by main.go when agent.Run() returns a non-nil
+// error that isn't an *ErrTaskFailed (whose outcome was already posted
+// inside Run()). It builds and posts a "failed" or "cancelled" outcome from
+// the agent context.
+func (a *Agent) PostTaskError(ac *AgentContext, err error) {
+	status := "failed"
+	if errors.Is(err, context.Canceled) {
+		status = "cancelled"
+	}
+	feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, feedback.TaskOutcome{
+		SessionID:       ac.SessionID,
+		TaskFingerprint: feedback.Fingerprint(ac.Task.RawInput),
+		Category:        string(ac.Task.Category),
+		Scope:           string(ac.Task.Scope),
+		Status:          status,
+		Summary:         err.Error(),
+		FilesChanged:    filesChangedCount(ac),
+		Iterations:      ac.Iteration,
+		ReviewRetries:   ac.ReviewRetries,
+		TotalTokensUsed: ac.TotalTokensUsed,
+		DurationMs:      time.Since(ac.StartedAt).Milliseconds(),
+		PlannerModel:    a.cfg.PlannerModel,
+		CoderModel:      a.cfg.CoderModel,
+		Timestamp:       time.Now(),
+	})
 }
 
 func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response string) error {
