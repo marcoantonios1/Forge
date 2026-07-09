@@ -518,7 +518,9 @@ func runTask(
 			ToolCallerContextTokens: cfg.Limits.ToolCallerContextTokens,
 			CompactorContextTokens:  cfg.Limits.CompactorContextTokens,
 		},
-		Debug:   debug,
+		Debug:           debug,
+		FeedbackEnabled: cfg.FeedbackEnabled,
+		FeedbackBaseURL: cfg.CostguardURL,
 	}
 
 	// Merge --allowed-tools with the session mode's auto-approved categories.
@@ -548,8 +550,13 @@ func runTask(
 	a := agent.New(agentCfg, client, registry, emitter, confirmer, comp, os.Stdin, os.Stderr, mcpClients)
 	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory, mem)
 
-	if err := a.Run(ctx, ac); err != nil {
-		return err
+	runErr := a.Run(ctx, ac)
+	var taskFailed *agent.ErrTaskFailed
+	if runErr != nil && !errors.As(runErr, &taskFailed) {
+		a.PostTaskError(ac, runErr)
+	}
+	if runErr != nil {
+		return runErr
 	}
 	if ac.Patches.Len() > 0 {
 		_, autoConfirmer := confirmer.(confirm.AutoConfirmer)
