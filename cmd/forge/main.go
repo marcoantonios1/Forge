@@ -128,6 +128,12 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
 		return 1
 	}
+	// FORGE_DEBUG (env var, read into appCfg.Debug) previously only gated
+	// [costguard] tracing — every other subsystem (compiler/agent/reviewer/
+	// memory/context/feedback) only responded to the separate --debug CLI
+	// flag. Promote here so FORGE_DEBUG=true enables all debug tracing, not
+	// just Costguard's, matching what setting it actually implies.
+	debug = debug || appCfg.Debug
 	cgClient := costguard.New(appCfg)
 	comp := compiler.New(cgClient, appCfg.CompilerModel, debug)
 
