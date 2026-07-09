@@ -56,7 +56,7 @@ var (
 )
 
 type headlessResult struct {
-	Status     string   `json:"status"` // "success" | "failure" | "rejected"
+	Status     string   `json:"status"` // "success" | "failure"
 	Summary    string   `json:"summary"`
 	Files      []string `json:"files"` // relative paths of files patched
 	Iterations int      `json:"iterations"`
@@ -152,11 +152,6 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 
 	// 6. Compile.
 	task, err := comp.Compile(ctx, rawTask)
-	var reject *compiler.RejectionError
-	if errors.As(err, &reject) {
-		writeResult(outputFmt, headlessResult{Status: "rejected", Summary: reject.Reason})
-		return 1
-	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "compile error: %v\n", err)
 		return 1
@@ -1174,8 +1169,7 @@ func main() {
 		// resume-time re-compilation drift becomes a problem in practice.
 		resumeCtx := context.Background()
 		resumedTask, compErr := comp.Compile(resumeCtx, saved.RawInput)
-		var reject *compiler.RejectionError
-		if errors.As(compErr, &reject) || compErr != nil {
+		if compErr != nil {
 			fmt.Fprintf(os.Stderr, "could not resume: re-compiling original task failed: %v\n", compErr)
 			os.Exit(1)
 		}
@@ -1291,12 +1285,7 @@ func main() {
 				// Cancelling the current task does NOT clear the queue —
 				// the next queued task still runs automatically.
 			} else {
-				var re *compiler.RejectionError
-				if errors.As(runErr, &re) {
-					fmt.Fprintf(os.Stderr, "rejected: %s\n", re.Reason)
-				} else {
-					fmt.Fprintf(os.Stderr, "error: %s\n", runErr)
-				}
+				fmt.Fprintf(os.Stderr, "error: %s\n", runErr)
 				// Task failure also does not clear the queue — drain continues.
 			}
 		}

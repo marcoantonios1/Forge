@@ -3,6 +3,7 @@ package compiler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -23,7 +24,7 @@ func New(client *costguard.Client, model string, debug bool) *Compiler {
 func (c *Compiler) Compile(ctx context.Context, rawInput string) (*Task, error) {
 	rawInput = strings.TrimSpace(rawInput)
 	if rawInput == "" {
-		return nil, &RejectionError{Reason: "input is empty", Input: rawInput}
+		return nil, errors.New("compiler: input is empty")
 	}
 
 	req := costguard.ChatRequest{
@@ -56,15 +57,6 @@ func (c *Compiler) Compile(ctx context.Context, rawInput string) (*Task, error) 
 	jsonStr, err := extractJSON(raw)
 	if err != nil {
 		return nil, err
-	}
-
-	// Check for rejection before attempting full unmarshal.
-	var rejection struct {
-		Rejected bool   `json:"rejected"`
-		Reason   string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(jsonStr), &rejection); err == nil && rejection.Rejected {
-		return nil, &RejectionError{Reason: rejection.Reason, Input: rawInput}
 	}
 
 	var task Task
