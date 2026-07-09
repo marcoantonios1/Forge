@@ -1054,6 +1054,7 @@ func main() {
 		for range sigs {
 			if !lastSig.IsZero() && time.Since(lastSig) < time.Second {
 				fmt.Println("\nbye.")
+				feedback.Wait(5 * time.Second) // give a just-finished task's feedback POST a chance to land
 				os.Exit(0)
 			}
 			lastSig = time.Now()
@@ -1069,6 +1070,7 @@ func main() {
 				// on Ctrl+C at the idle prompt if the queue is non-empty, rather than
 				// exiting silently and losing queued tasks.
 				fmt.Println("\nbye.")
+				feedback.Wait(5 * time.Second) // give a just-finished task's feedback POST a chance to land
 				os.Exit(0)
 			}
 		}
