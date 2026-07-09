@@ -48,7 +48,8 @@ type Config struct {
 	ReviewerModel     string
 	EmbeddingModel    string
 	Limits            ModelLimits
-	FeedbackEnabled   bool // FORGE_FEEDBACK_ENABLED=true — off by default
+	FeedbackEnabled   bool   // FORGE_FEEDBACK_ENABLED=true — off by default
+	FeedbackAPIKey    string // FEEDBACK_API_KEY — sent as "Authorization: Bearer <key>" on /v1/feedback POSTs and /v1/feedback/stats GETs; empty = no auth header
 }
 
 // loadDotEnv reads .env from the current directory and sets any variables
@@ -250,6 +251,9 @@ if v := os.Getenv("COSTGUARD_AGENT"); v != "" {
 	// parse "false"/"0" for explicit opt-out.
 	if v := os.Getenv("FORGE_FEEDBACK_ENABLED"); strings.EqualFold(v, "true") || v == "1" {
 		cfg.FeedbackEnabled = true
+	}
+	if v := os.Getenv("FEEDBACK_API_KEY"); v != "" {
+		cfg.FeedbackAPIKey = v
 	}
 
 	return cfg, nil
