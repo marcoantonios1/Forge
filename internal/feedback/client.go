@@ -8,8 +8,16 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
+
+// inFlight tracks PostOutcome goroutines that have not yet completed. A
+// process about to exit (e.g. --print/headless mode, which os.Exit()s right
+// after its top-level function returns) must call Wait() first — otherwise
+// os.Exit() kills the fire-and-forget goroutine before its HTTP request ever
+// leaves the machine, silently dropping the outcome.
+var inFlight sync.WaitGroup
 
 // PostOutcome ships outcome to Costguard's /v1/feedback endpoint in a
 // fire-and-forget goroutine. Errors are logged to stderr but never propagate
@@ -28,7 +36,10 @@ func PostOutcome(enabled bool, baseURL, apiKey string, outcome TaskOutcome) {
 	if !enabled {
 		return
 	}
+	inFlight.Add(1)
 	go func() {
+		defer inFlight.Done()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -60,4 +71,26 @@ func PostOutcome(enabled bool, baseURL, apiKey string, outcome TaskOutcome) {
 			fmt.Fprintf(os.Stderr, "[feedback] server returned %d for /v1/feedback\n", resp.StatusCode)
 		}
 	}()
+}
+
+// Wait blocks until every PostOutcome call started so far has completed, or
+// until timeout elapses, whichever comes first. It is always safe to call —
+// if nothing is in flight (including when FeedbackEnabled is false, since
+// PostOutcome never spawns a goroutine in that case), it returns immediately.
+//
+// Callers that are about to terminate the process (os.Exit, or falling off
+// the end of main) should call this first so a fire-and-forget feedback POST
+// isn't silently killed mid-flight. Long-running processes (the REPL, between
+// tasks) do not need to call this — their goroutines have the rest of the
+// process lifetime to complete on their own.
+func Wait(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		inFlight.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
 }
