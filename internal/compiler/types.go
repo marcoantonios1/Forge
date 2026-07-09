@@ -67,12 +67,3 @@ func (t *Task) Validate() error {
 	}
 	return nil
 }
-
-type RejectionError struct {
-	Reason string
-	Input  string
-}
-
-func (e *RejectionError) Error() string {
-	return fmt.Sprintf("compiler: rejected: %s", e.Reason)
-}

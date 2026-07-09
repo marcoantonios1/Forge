@@ -1101,8 +1101,7 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 	}
 
 	refined, err := a.comp.Compile(ctx, answer)
-	var reject *compiler.RejectionError
-	if errors.As(err, &reject) || err != nil {
+	if err != nil {
 		a.emitter.Emit(events.ClarificationAnsweredEvent(ac.SessionID, answer, false))
 		return ac.Task
 	}
