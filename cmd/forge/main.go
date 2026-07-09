@@ -1219,7 +1219,9 @@ func main() {
 				ToolCallerContextTokens: cfg.Limits.ToolCallerContextTokens,
 				CompactorContextTokens:  cfg.Limits.CompactorContextTokens,
 			},
-			Debug:   *debugFlag,
+			Debug:           *debugFlag,
+			FeedbackEnabled: cfg.FeedbackEnabled,
+			FeedbackBaseURL: cfg.CostguardURL,
 		}
 		resumePreApproved := confirm.ParseAllowedTools(*allowedToolsFlag)
 		if resumePreApproved == nil {
@@ -1245,6 +1247,10 @@ func main() {
 		resumeAgent := agent.New(resumeAgentCfg, client, resumeRegistry, emitter, resumeConfirmer, comp, os.Stdin, os.Stderr, mcpClients)
 
 		runErr := resumeAgent.Run(resumeCtx, ac)
+		var resumeTaskFailed *agent.ErrTaskFailed
+		if runErr != nil && !errors.As(runErr, &resumeTaskFailed) {
+			resumeAgent.PostTaskError(ac, runErr)
+		}
 		if runErr == nil && ac.Patches.Len() > 0 {
 			_, autoC := resumeConfirmer.(confirm.AutoConfirmer)
 			runGitWorkflow(resumeCtx, ac, resumeRegistry, emitter, autoC || sessionMode == mode.ModeAutonomous) //nolint:errcheck
