@@ -535,6 +535,7 @@ func runTask(
 		Debug:           debug,
 		FeedbackEnabled: cfg.FeedbackEnabled,
 		FeedbackBaseURL: cfg.CostguardURL,
+		FeedbackAPIKey:  cfg.FeedbackAPIKey,
 	}
 
 	// Merge --allowed-tools with the session mode's auto-approved categories.
@@ -1458,6 +1459,7 @@ func main() {
 			Debug:           *debugFlag,
 			FeedbackEnabled: cfg.FeedbackEnabled,
 			FeedbackBaseURL: cfg.CostguardURL,
+			FeedbackAPIKey:  cfg.FeedbackAPIKey,
 		}
 		resumePreApproved := confirm.ParseAllowedTools(*allowedToolsFlag)
 		if resumePreApproved == nil {
