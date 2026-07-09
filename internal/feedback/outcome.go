@@ -20,17 +20,17 @@ type TaskOutcome struct {
 	SessionID       string `json:"session_id"`
 	TaskFingerprint string `json:"task_fingerprint"` // SHA256 of normalised task text
 	Category        string `json:"category"`         // from compiler.Task.Category
-	Scope           string `json:"scope"`             // from compiler.Task.Scope
+	Scope           string `json:"scope"`            // from compiler.Task.Scope
 
 	// Outcome
-	Status       string `json:"status"` // "completed" | "failed" | "rejected" | "cancelled"
-	Summary      string `json:"summary"` // ac.LastSummary on completion; error text on failure
+	Status       string `json:"status"`        // "completed" | "failed" | "rejected" | "cancelled"
+	Summary      string `json:"summary"`       // ac.LastSummary on completion; error text on failure
 	FilesChanged int    `json:"files_changed"` // non-reverted patched files count
 	Iterations   int    `json:"iterations"`
 
 	// Quality signals
 	ReviewRetries int  `json:"reviewer_retries"` // how many times the reviewer rejected before accepting
-	UserAccepted  bool `json:"user_accepted"`     // true if patch was confirmed (vs auto-applied or rejected)
+	UserAccepted  bool `json:"user_accepted"`    // true if patch was confirmed (vs auto-applied or rejected)
 
 	// Cost signals
 	TotalTokensUsed int   `json:"total_tokens_used"` // sum across all Costguard calls in this task
