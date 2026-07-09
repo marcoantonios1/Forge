@@ -2,8 +2,11 @@ package feedback
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,7 +18,7 @@ func TestPostOutcomeDisabledIsNoop(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	PostOutcome(false, srv.URL, "", TaskOutcome{SessionID: "s1"})
+	PostOutcome(false, srv.URL, "", false, TaskOutcome{SessionID: "s1"})
 
 	select {
 	case <-called:
@@ -43,7 +46,7 @@ func TestPostOutcomeEnabledPosts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	PostOutcome(true, srv.URL, "test-key", TaskOutcome{SessionID: "s2", Status: "completed"})
+	PostOutcome(true, srv.URL, "test-key", false, TaskOutcome{SessionID: "s2", Status: "completed"})
 
 	select {
 	case outcome := <-received:
@@ -52,6 +55,38 @@ func TestPostOutcomeEnabledPosts(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for PostOutcome to POST")
+	}
+}
+
+// TestPostOutcomeDebugLogsSuccess proves the exact question a user asked in
+// practice — "did the feedback POST actually work?" — is answerable from
+// stderr alone, without needing visibility into the Costguard server: with
+// debug=true, a successful POST prints a one-line confirmation.
+func TestPostOutcomeDebugLogsSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = w
+
+	PostOutcome(true, srv.URL, "", true, TaskOutcome{SessionID: "s5", Status: "completed", TotalTokensUsed: 123})
+	Wait(5 * time.Second)
+
+	os.Stderr = origStderr
+	w.Close()
+	out, _ := io.ReadAll(r)
+
+	if !strings.Contains(string(out), "[feedback] posted outcome for session s5") {
+		t.Fatalf("expected debug success line, got: %q", string(out))
+	}
+	if !strings.Contains(string(out), "tokens=123") {
+		t.Fatalf("expected token count in debug line, got: %q", string(out))
 	}
 }
 
@@ -68,7 +103,7 @@ func TestWaitBlocksUntilPostCompletes(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	PostOutcome(true, srv.URL, "", TaskOutcome{SessionID: "s3"})
+	PostOutcome(true, srv.URL, "", false, TaskOutcome{SessionID: "s3"})
 	Wait(5 * time.Second)
 
 	select {
@@ -103,7 +138,7 @@ func TestWaitRespectsTimeout(t *testing.T) {
 		srv.Close()
 	}()
 
-	PostOutcome(true, srv.URL, "", TaskOutcome{SessionID: "s4"})
+	PostOutcome(true, srv.URL, "", false, TaskOutcome{SessionID: "s4"})
 
 	start := time.Now()
 	Wait(300 * time.Millisecond)
