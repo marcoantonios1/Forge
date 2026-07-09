@@ -252,6 +252,9 @@ if v := os.Getenv("COSTGUARD_AGENT"); v != "" {
 	if v := os.Getenv("FORGE_FEEDBACK_ENABLED"); strings.EqualFold(v, "true") || v == "1" {
 		cfg.FeedbackEnabled = true
 	}
+	if v := os.Getenv("FEEDBACK_API_KEY"); v != "" {
+		cfg.FeedbackAPIKey = v
+	}
 
 	return cfg, nil
 }
