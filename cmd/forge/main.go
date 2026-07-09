@@ -212,6 +212,7 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 		Debug:           debug,
 		FeedbackEnabled: appCfg.FeedbackEnabled,
 		FeedbackBaseURL: appCfg.CostguardURL,
+		FeedbackAPIKey:  appCfg.FeedbackAPIKey,
 	}
 	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer, nil, nil, nil, mcpClients)
 
