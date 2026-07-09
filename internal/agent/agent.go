@@ -15,6 +15,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/compiler"
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
+	"github.com/marcoantonios1/Forge/internal/feedback"
 	"github.com/marcoantonios1/Forge/internal/mcp"
 	"github.com/marcoantonios1/Forge/internal/patch"
 	"github.com/marcoantonios1/Forge/internal/reposummary"
@@ -71,6 +72,9 @@ type Config struct {
 	AutoApply             bool
 	Debug                 bool
 	StuckAfterIterations  int // minimum iterations before stuck check; default 3
+	FeedbackEnabled       bool
+	FeedbackBaseURL       string
+	FeedbackAPIKey        string
 	// TODO: expose stuck-window sizes (tool call/result/response history
 	// lengths) as additional Config fields for fine-grained tuning.
 	// TODO: wire CompilerMaxTokens into compiler.Compile() if/when its calls
@@ -195,6 +199,10 @@ type Agent struct {
 	clarifyIn  io.Reader          // nil = clarification disabled
 	clarifyOut io.Writer          // nil = clarification disabled
 	mcpClients []mcp.Client       // nil or empty slice if no MCP servers configured
+
+	feedbackEnabled bool
+	feedbackBaseURL string
+	feedbackAPIKey  string
 }
 
 func New(
@@ -221,8 +229,18 @@ func New(
 		clarifyIn:  clarifyIn,
 		clarifyOut: clarifyOut,
 		mcpClients: mcpClients,
+
+		feedbackEnabled: cfg.FeedbackEnabled,
+		feedbackBaseURL: cfg.FeedbackBaseURL,
+		feedbackAPIKey:  cfg.FeedbackAPIKey,
 	}
 }
+
+// ErrTaskFailed is returned by Run() when the agent emitted FORGE_FAILED.
+// The outcome was already posted inside Run() — callers must not post again.
+type ErrTaskFailed struct{ Reason string }
+
+func (e *ErrTaskFailed) Error() string { return "agent: task failed: " + e.Reason }
 
 // stuckState tracks a rolling window of recent agent activity to detect
 // loops the backstop iteration limit would otherwise take much longer to catch.
@@ -399,6 +417,7 @@ func (a *Agent) summarizeHistory(ctx context.Context, ac *AgentContext, history 
 			summaries = append(summaries, fmt.Sprintf("[chunk %d/%d: summary unavailable]", i+1, len(chunks)))
 			continue
 		}
+		ac.TotalTokensUsed += resp.Usage.TotalTokens
 		summaries = append(summaries, strings.TrimSpace(resp.Choices[0].Message.Content))
 	}
 	return strings.Join(summaries, " ")
@@ -518,6 +537,7 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		if len(resp.Choices) == 0 {
 			return fmt.Errorf("agent: empty response from model")
 		}
+		ac.TotalTokensUsed += resp.Usage.TotalTokens
 
 		response := strings.TrimSpace(resp.Choices[0].Message.Content)
 		ac.History = append(ac.History, costguard.Message{Role: "assistant", Content: response})
@@ -867,6 +887,7 @@ func (a *Agent) reviewPatch(ctx context.Context, ac *AgentContext, diffText stri
 	if err != nil || len(resp.Choices) == 0 {
 		return true, "" // fail open
 	}
+	ac.TotalTokensUsed += resp.Usage.TotalTokens
 
 	out := strings.TrimSpace(resp.Choices[0].Message.Content)
 	switch {
@@ -954,6 +975,7 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 	if err != nil || len(resp.Choices) == 0 {
 		return ac.Task
 	}
+	ac.TotalTokensUsed += resp.Usage.TotalTokens
 
 	response := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if !strings.HasPrefix(response, "FORGE_CLARIFY:") {
@@ -1091,6 +1113,7 @@ func (a *Agent) resolveIntent(ctx context.Context, ac *AgentContext, intent stri
 	if len(resp.Choices) == 0 {
 		return "", errors.New("tool caller: empty response")
 	}
+	ac.TotalTokensUsed += resp.Usage.TotalTokens
 	out := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if !strings.Contains(out, "TOOL:") {
 		return "", fmt.Errorf("tool caller: response did not contain a TOOL: call: %q", out)

@@ -48,6 +48,7 @@ type Config struct {
 	ReviewerModel     string
 	EmbeddingModel    string
 	Limits            ModelLimits
+	FeedbackEnabled   bool // FORGE_FEEDBACK_ENABLED=true — off by default
 }
 
 // loadDotEnv reads .env from the current directory and sets any variables
@@ -243,6 +244,12 @@ if v := os.Getenv("COSTGUARD_AGENT"); v != "" {
 			return nil, fmt.Errorf("config: invalid FORGE_DEBUG %q: %w", v, err)
 		}
 		cfg.Debug = b
+	}
+	// No default — FeedbackEnabled is false unless explicitly set.
+	// TODO: when FeedbackEnabled defaults to true in a future release, also
+	// parse "false"/"0" for explicit opt-out.
+	if v := os.Getenv("FORGE_FEEDBACK_ENABLED"); strings.EqualFold(v, "true") || v == "1" {
+		cfg.FeedbackEnabled = true
 	}
 
 	return cfg, nil
