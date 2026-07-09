@@ -10,11 +10,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -967,6 +969,220 @@ func runSessionsCommand(args []string) int {
 	return 0
 }
 
+// runStatsCommand implements `forge stats`: fetches quality/cost aggregates
+// from Costguard's GET /v1/feedback/stats and renders them as a table (or
+// raw JSON with --json). Requires FORGE_FEEDBACK_ENABLED=true — without it
+// there is nothing for Costguard to have aggregated.
+//
+// config.Load() is called here rather than threaded in from main(), since
+// subcommands dispatch and exit before main()'s own config-loading step runs.
+func runStatsCommand(args []string) int {
+	// Parse the subcommand's own flags from args (not os.Args) so they don't
+	// conflict with the top-level flags already parsed by flag.Parse().
+	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
+	roleFlag := fs.String("role", "", "filter by model role (planner, coder, reviewer, ...)")
+	modelFlag := fs.String("model", "", "filter by model name")
+	lastFlag := fs.Int("last", 0, "limit to the last N tasks")
+	jsonFlag := fs.Bool("json", false, "output raw JSON instead of a table")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: forge stats [--role <role>] [--model <model>] [--last <n>] [--json]")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "stats: config error: %v\n", err)
+		return 1
+	}
+
+	if !cfg.FeedbackEnabled {
+		fmt.Println("Quality stats are not available.")
+		fmt.Println("Set FORGE_FEEDBACK_ENABLED=true and restart Forge to begin collecting task outcomes.")
+		fmt.Println("Stats will appear here once Costguard has received at least one feedback payload.")
+		return 0
+	}
+
+	// Build query string.
+	params := url.Values{}
+	if *roleFlag != "" {
+		params.Set("role", *roleFlag)
+	}
+	if *modelFlag != "" {
+		params.Set("model", *modelFlag)
+	}
+	if *lastFlag > 0 {
+		params.Set("last", strconv.Itoa(*lastFlag))
+	}
+	statsURL := strings.TrimRight(cfg.CostguardURL, "/") + "/v1/feedback/stats"
+	if len(params) > 0 {
+		statsURL += "?" + params.Encode()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, statsURL, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "stats: building request: %v\n", err)
+		return 1
+	}
+	req.Header.Set("Accept", "application/json")
+	// NOTE: no per-request API key — config.Config has no CostguardAPIKey
+	// field today (Costguard is unauthenticated/local in this codebase); add
+	// one here alongside a config.Config field if that changes.
+	req.Header.Set("X-Costguard-Agent", "forge")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		// Distinguish network errors (Costguard unreachable) from other errors.
+		if isUnreachable(err) {
+			fmt.Printf("Costguard is unreachable at %s\n", cfg.CostguardURL)
+			fmt.Println("Ensure Costguard is running and COSTGUARD_URL is correct.")
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "stats: request error: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "stats: reading response: %v\n", err)
+		return 1
+	}
+
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented {
+		fmt.Println("The /v1/feedback/stats endpoint is not yet available on this Costguard instance.")
+		fmt.Println("Upgrade Costguard to a version that supports the feedback API.")
+		return 0
+	}
+	if resp.StatusCode >= 400 {
+		fmt.Fprintf(os.Stderr, "stats: server returned %d: %s\n", resp.StatusCode, strings.TrimSpace(string(body)))
+		return 1
+	}
+
+	if *jsonFlag {
+		fmt.Println(string(body))
+		return 0
+	}
+
+	return renderStatsTable(body)
+}
+
+// statsRow is one row of Costguard's GET /v1/feedback/stats response — a
+// per-role/model aggregation over collected TaskOutcome feedback. Expected
+// response shape (a JSON array, or an object enveloping one — see
+// renderStatsTable):
+//
+//	[
+//	  {
+//	    "role":               "planner",
+//	    "model":              "claude-sonnet-4-6",
+//	    "tasks":              142,
+//	    "success_rate":       0.91,
+//	    "reviewer_pass_rate": 0.84,
+//	    "avg_retries":        0.3,
+//	    "avg_latency_ms":     4200
+//	  },
+//	  ...
+//	]
+type statsRow struct {
+	Role             string  `json:"role"`
+	Model            string  `json:"model"`
+	Tasks            int     `json:"tasks"`
+	SuccessRate      float64 `json:"success_rate"`
+	ReviewerPassRate float64 `json:"reviewer_pass_rate"`
+	AvgRetries       float64 `json:"avg_retries"`
+	AvgLatencyMs     int     `json:"avg_latency_ms"`
+}
+
+// renderStatsTable prints body (a GET /v1/feedback/stats response) as a
+// plain-text table. Parsing is lenient — Costguard may return a bare JSON
+// array, or an object enveloping the array under "rows"/"stats"/"data" — so
+// minor response-shape changes on the Costguard side don't break the command.
+//
+// TODO: add trend arrows (↑/↓/→) based on comparing the most recent N tasks
+// against the prior N tasks, once Costguard's /v1/feedback/stats response
+// includes a time-windowed breakdown.
+func renderStatsTable(body []byte) int {
+	var rows []statsRow
+	if err := json.Unmarshal(body, &rows); err != nil {
+		// Response may be a top-level object with a "rows" or "stats" key —
+		// try unwrapping a common envelope before giving up.
+		var envelope struct {
+			Rows  []statsRow `json:"rows"`
+			Stats []statsRow `json:"stats"`
+			Data  []statsRow `json:"data"`
+		}
+		if err2 := json.Unmarshal(body, &envelope); err2 != nil {
+			fmt.Fprintf(os.Stderr, "stats: unexpected response format: %v\n", err)
+			fmt.Fprintf(os.Stderr, "raw response: %s\n", string(body))
+			return 1
+		}
+		switch {
+		case len(envelope.Rows) > 0:
+			rows = envelope.Rows
+		case len(envelope.Stats) > 0:
+			rows = envelope.Stats
+		case len(envelope.Data) > 0:
+			rows = envelope.Data
+		default:
+			fmt.Println("no stats available yet — run some tasks with FORGE_FEEDBACK_ENABLED=true first")
+			return 0
+		}
+	}
+
+	if len(rows) == 0 {
+		fmt.Println("no stats available yet — run some tasks with FORGE_FEEDBACK_ENABLED=true first")
+		return 0
+	}
+
+	// Table header.
+	const colFmt = "%-16s  %-30s  %7s  %12s  %18s  %11s  %13s\n"
+	fmt.Printf(colFmt,
+		"ROLE", "MODEL", "TASKS", "SUCCESS %", "REVIEWER PASS %", "AVG RETRIES", "AVG LATENCY")
+	fmt.Println(strings.Repeat("─", 100))
+
+	for _, r := range rows {
+		fmt.Printf(colFmt,
+			r.Role,
+			truncate(r.Model, 30),
+			strconv.Itoa(r.Tasks),
+			fmt.Sprintf("%.1f%%", r.SuccessRate*100),
+			fmt.Sprintf("%.1f%%", r.ReviewerPassRate*100),
+			fmt.Sprintf("%.1f", r.AvgRetries),
+			fmt.Sprintf("%dms", r.AvgLatencyMs),
+		)
+	}
+	return 0
+}
+
+// isUnreachable returns true for network-level connection errors (the server
+// wasn't reachable at all) vs application-level errors (the server responded
+// with an error status). Used to give a more helpful message than the raw
+// net.OpError text.
+func isUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "no such host") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "i/o timeout")
+}
+
+// truncate shortens s to max characters, appending "…" if it was truncated.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "…"
+}
+
 func main() {
 	flag.Parse()
 
@@ -986,6 +1202,10 @@ func main() {
 
 	if flag.NArg() > 0 && flag.Arg(0) == "sessions" {
 		os.Exit(runSessionsCommand(flag.Args()[1:]))
+	}
+
+	if flag.NArg() > 0 && flag.Arg(0) == "stats" {
+		os.Exit(runStatsCommand(flag.Args()[1:]))
 	}
 
 	if *printFlag {
