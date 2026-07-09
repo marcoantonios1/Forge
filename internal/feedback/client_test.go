@@ -54,3 +54,60 @@ func TestPostOutcomeEnabledPosts(t *testing.T) {
 		t.Fatal("timed out waiting for PostOutcome to POST")
 	}
 }
+
+// TestWaitBlocksUntilPostCompletes reproduces the os.Exit() race: without
+// Wait(), a process that exits right after calling PostOutcome can kill the
+// goroutine before its request ever reaches the server. This asserts Wait()
+// only returns once the server has actually received the request.
+func TestWaitBlocksUntilPostCompletes(t *testing.T) {
+	serverHit := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond) // simulate network/server latency
+		close(serverHit)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	PostOutcome(true, srv.URL, "", TaskOutcome{SessionID: "s3"})
+	Wait(5 * time.Second)
+
+	select {
+	case <-serverHit:
+		// expected: the server was hit before Wait() returned
+	default:
+		t.Fatal("Wait() returned before the in-flight POST reached the server")
+	}
+}
+
+// TestWaitIsInstantWhenNothingInFlight ensures Wait() never adds latency to
+// the common case (FeedbackEnabled=false, or simply no recent PostOutcome
+// calls) — callers on every exit path can call it unconditionally.
+func TestWaitIsInstantWhenNothingInFlight(t *testing.T) {
+	start := time.Now()
+	Wait(5 * time.Second)
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("Wait() took %v with nothing in flight, want near-instant", elapsed)
+	}
+}
+
+// TestWaitRespectsTimeout ensures a hung server can't block process exit
+// forever — Wait() must give up after the timeout even if the POST is still
+// in flight.
+func TestWaitRespectsTimeout(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block // never respond within the test
+	}))
+	defer func() {
+		close(block)
+		srv.Close()
+	}()
+
+	PostOutcome(true, srv.URL, "", TaskOutcome{SessionID: "s4"})
+
+	start := time.Now()
+	Wait(300 * time.Millisecond)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Wait() took %v, want to give up around its 300ms timeout", elapsed)
+	}
+}

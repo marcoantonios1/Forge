@@ -1416,6 +1416,7 @@ func main() {
 		case in := <-lineCh:
 			if in.err != nil {
 				fmt.Println("\nbye.")
+				feedback.Wait(5 * time.Second) // give a just-finished task's feedback POST a chance to land
 				return
 			}
 			line := in.text
