@@ -25,6 +25,7 @@ type AgentContext struct {
 	AppliedCommit      string // short commit hash (set post-task)
 	ClarificationAsked bool   // true after clarify() runs; prevents a second round
 	ReviewRetries      int    // rejection count for the current patch attempt; reset on success or cap exceeded
+	TotalTokensUsed    int    // accumulated sum of resp.Usage.TotalTokens across all Costguard calls
 }
 
 func NewAgentContext(

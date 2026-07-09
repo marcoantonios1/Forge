@@ -15,6 +15,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/compiler"
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
+	"github.com/marcoantonios1/Forge/internal/feedback"
 	"github.com/marcoantonios1/Forge/internal/mcp"
 	"github.com/marcoantonios1/Forge/internal/patch"
 	"github.com/marcoantonios1/Forge/internal/reposummary"
@@ -71,6 +72,9 @@ type Config struct {
 	AutoApply             bool
 	Debug                 bool
 	StuckAfterIterations  int // minimum iterations before stuck check; default 3
+	FeedbackEnabled       bool
+	FeedbackBaseURL       string
+	FeedbackAPIKey        string
 	// TODO: expose stuck-window sizes (tool call/result/response history
 	// lengths) as additional Config fields for fine-grained tuning.
 	// TODO: wire CompilerMaxTokens into compiler.Compile() if/when its calls
@@ -195,6 +199,10 @@ type Agent struct {
 	clarifyIn  io.Reader          // nil = clarification disabled
 	clarifyOut io.Writer          // nil = clarification disabled
 	mcpClients []mcp.Client       // nil or empty slice if no MCP servers configured
+
+	feedbackEnabled bool
+	feedbackBaseURL string
+	feedbackAPIKey  string
 }
 
 func New(
@@ -221,8 +229,18 @@ func New(
 		clarifyIn:  clarifyIn,
 		clarifyOut: clarifyOut,
 		mcpClients: mcpClients,
+
+		feedbackEnabled: cfg.FeedbackEnabled,
+		feedbackBaseURL: cfg.FeedbackBaseURL,
+		feedbackAPIKey:  cfg.FeedbackAPIKey,
 	}
 }
+
+// ErrTaskFailed is returned by Run() when the agent emitted FORGE_FAILED.
+// The outcome was already posted inside Run() — callers must not post again.
+type ErrTaskFailed struct{ Reason string }
+
+func (e *ErrTaskFailed) Error() string { return "agent: task failed: " + e.Reason }
 
 // stuckState tracks a rolling window of recent agent activity to detect
 // loops the backstop iteration limit would otherwise take much longer to catch.
@@ -399,6 +417,7 @@ func (a *Agent) summarizeHistory(ctx context.Context, ac *AgentContext, history 
 			summaries = append(summaries, fmt.Sprintf("[chunk %d/%d: summary unavailable]", i+1, len(chunks)))
 			continue
 		}
+		ac.TotalTokensUsed += resp.Usage.TotalTokens
 		summaries = append(summaries, strings.TrimSpace(resp.Choices[0].Message.Content))
 	}
 	return strings.Join(summaries, " ")
@@ -518,6 +537,7 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		if len(resp.Choices) == 0 {
 			return fmt.Errorf("agent: empty response from model")
 		}
+		ac.TotalTokensUsed += resp.Usage.TotalTokens
 
 		response := strings.TrimSpace(resp.Choices[0].Message.Content)
 		ac.History = append(ac.History, costguard.Message{Role: "assistant", Content: response})
@@ -566,6 +586,23 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 				SessionID: ac.SessionID,
 				Payload:   map[string]any{"session_id": ac.SessionID, "summary": summary, "iterations": ac.Iteration},
 			})
+			feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, feedback.TaskOutcome{
+				SessionID:       ac.SessionID,
+				TaskFingerprint: feedback.Fingerprint(ac.Task.RawInput),
+				Category:        string(ac.Task.Category),
+				Scope:           string(ac.Task.Scope),
+				Status:          "completed",
+				Summary:         summary,
+				FilesChanged:    filesChangedCount(ac),
+				Iterations:      ac.Iteration,
+				ReviewRetries:   ac.ReviewRetries,
+				UserAccepted:    !a.cfg.AutoApply, // AutoApply=true means autonomous (no user decision)
+				TotalTokensUsed: ac.TotalTokensUsed,
+				DurationMs:      time.Since(ac.StartedAt).Milliseconds(),
+				PlannerModel:    a.cfg.PlannerModel,
+				CoderModel:      a.cfg.CoderModel,
+				Timestamp:       time.Now(),
+			})
 			return nil
 
 		// b) FORGE_FAILED
@@ -577,7 +614,23 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 				SessionID: ac.SessionID,
 				Payload:   map[string]any{"session_id": ac.SessionID, "reason": reason, "iterations": ac.Iteration},
 			})
-			return fmt.Errorf("agent: task failed: %s", reason)
+			feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, feedback.TaskOutcome{
+				SessionID:       ac.SessionID,
+				TaskFingerprint: feedback.Fingerprint(ac.Task.RawInput),
+				Category:        string(ac.Task.Category),
+				Scope:           string(ac.Task.Scope),
+				Status:          "failed",
+				Summary:         reason,
+				FilesChanged:    0,
+				Iterations:      ac.Iteration,
+				ReviewRetries:   ac.ReviewRetries,
+				TotalTokensUsed: ac.TotalTokensUsed,
+				DurationMs:      time.Since(ac.StartedAt).Milliseconds(),
+				PlannerModel:    a.cfg.PlannerModel,
+				CoderModel:      a.cfg.CoderModel,
+				Timestamp:       time.Now(),
+			})
+			return &ErrTaskFailed{Reason: reason}
 
 		// c) FORGE_PATCH_BEGIN...FORGE_PATCH_END
 		case strings.Contains(response, "FORGE_PATCH_BEGIN"):
@@ -643,6 +696,51 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 			return err
 		}
 	}
+}
+
+// filesChangedCount returns the count of distinct, non-reverted patched files
+// across ac.Patches — used for the feedback payload's FilesChanged field.
+func filesChangedCount(ac *AgentContext) int {
+	seen := map[string]bool{}
+	count := 0
+	for _, rec := range ac.Patches.AllRecords() {
+		if !rec.Reverted {
+			for p := range rec.Originals {
+				if !seen[p] {
+					seen[p] = true
+					count++
+				}
+			}
+		}
+	}
+	return count
+}
+
+// PostTaskError is called by main.go when agent.Run() returns a non-nil
+// error that isn't an *ErrTaskFailed (whose outcome was already posted
+// inside Run()). It builds and posts a "failed" or "cancelled" outcome from
+// the agent context.
+func (a *Agent) PostTaskError(ac *AgentContext, err error) {
+	status := "failed"
+	if errors.Is(err, context.Canceled) {
+		status = "cancelled"
+	}
+	feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, feedback.TaskOutcome{
+		SessionID:       ac.SessionID,
+		TaskFingerprint: feedback.Fingerprint(ac.Task.RawInput),
+		Category:        string(ac.Task.Category),
+		Scope:           string(ac.Task.Scope),
+		Status:          status,
+		Summary:         err.Error(),
+		FilesChanged:    filesChangedCount(ac),
+		Iterations:      ac.Iteration,
+		ReviewRetries:   ac.ReviewRetries,
+		TotalTokensUsed: ac.TotalTokensUsed,
+		DurationMs:      time.Since(ac.StartedAt).Milliseconds(),
+		PlannerModel:    a.cfg.PlannerModel,
+		CoderModel:      a.cfg.CoderModel,
+		Timestamp:       time.Now(),
+	})
 }
 
 func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response string) error {
@@ -867,6 +965,7 @@ func (a *Agent) reviewPatch(ctx context.Context, ac *AgentContext, diffText stri
 	if err != nil || len(resp.Choices) == 0 {
 		return true, "" // fail open
 	}
+	ac.TotalTokensUsed += resp.Usage.TotalTokens
 
 	out := strings.TrimSpace(resp.Choices[0].Message.Content)
 	switch {
@@ -954,6 +1053,7 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 	if err != nil || len(resp.Choices) == 0 {
 		return ac.Task
 	}
+	ac.TotalTokensUsed += resp.Usage.TotalTokens
 
 	response := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if !strings.HasPrefix(response, "FORGE_CLARIFY:") {
@@ -1091,6 +1191,7 @@ func (a *Agent) resolveIntent(ctx context.Context, ac *AgentContext, intent stri
 	if len(resp.Choices) == 0 {
 		return "", errors.New("tool caller: empty response")
 	}
+	ac.TotalTokensUsed += resp.Usage.TotalTokens
 	out := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if !strings.Contains(out, "TOOL:") {
 		return "", fmt.Errorf("tool caller: response did not contain a TOOL: call: %q", out)

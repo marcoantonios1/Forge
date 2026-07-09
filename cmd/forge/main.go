@@ -29,6 +29,7 @@ import (
 	"github.com/marcoantonios1/Forge/internal/memory"
 	"github.com/marcoantonios1/Forge/internal/costguard"
 	"github.com/marcoantonios1/Forge/internal/events"
+	"github.com/marcoantonios1/Forge/internal/feedback"
 	"github.com/marcoantonios1/Forge/internal/forgeinit"
 	"github.com/marcoantonios1/Forge/internal/mcp"
 	"github.com/marcoantonios1/Forge/internal/mode"
@@ -64,6 +65,13 @@ type headlessResult struct {
 
 func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.SessionMode) int {
 	// TODO: add --timeout <duration> flag to cancel ctx after a fixed wall-clock duration.
+
+	// --print mode os.Exit()s immediately on the int this function returns —
+	// os.Exit() kills any goroutine still in flight, including a fire-and-forget
+	// feedback POST from agent.Run()/PostTaskError. Registered first so it runs
+	// last (after every other defer here), giving any pending POST a bounded
+	// grace period before the process actually exits.
+	defer feedback.Wait(5 * time.Second)
 
 	// 1. Signal handling — Ctrl+C exits with code 130.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -195,13 +203,19 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 			ToolCallerContextTokens: appCfg.Limits.ToolCallerContextTokens,
 			CompactorContextTokens:  appCfg.Limits.CompactorContextTokens,
 		},
-		AutoApply: true,
-		Debug:     debug,
+		AutoApply:       true,
+		Debug:           debug,
+		FeedbackEnabled: appCfg.FeedbackEnabled,
+		FeedbackBaseURL: appCfg.CostguardURL,
 	}
 	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer, nil, nil, nil, mcpClients)
 
 	// 8. Run the agent.
 	runErr := ag.Run(ctx, ac)
+	var taskFailed *agent.ErrTaskFailed
+	if runErr != nil && !errors.As(runErr, &taskFailed) {
+		ag.PostTaskError(ac, runErr)
+	}
 
 	// Print timeline after agent finishes (stderr — keep stdout clean for --output json).
 	if tc != nil {
@@ -512,7 +526,9 @@ func runTask(
 			ToolCallerContextTokens: cfg.Limits.ToolCallerContextTokens,
 			CompactorContextTokens:  cfg.Limits.CompactorContextTokens,
 		},
-		Debug:   debug,
+		Debug:           debug,
+		FeedbackEnabled: cfg.FeedbackEnabled,
+		FeedbackBaseURL: cfg.CostguardURL,
 	}
 
 	// Merge --allowed-tools with the session mode's auto-approved categories.
@@ -542,8 +558,13 @@ func runTask(
 	a := agent.New(agentCfg, client, registry, emitter, confirmer, comp, os.Stdin, os.Stderr, mcpClients)
 	ac := agent.NewAgentContext(sessionID, task, cwd, projectCfg, sessionHistory, mem)
 
-	if err := a.Run(ctx, ac); err != nil {
-		return err
+	runErr := a.Run(ctx, ac)
+	var taskFailed *agent.ErrTaskFailed
+	if runErr != nil && !errors.As(runErr, &taskFailed) {
+		a.PostTaskError(ac, runErr)
+	}
+	if runErr != nil {
+		return runErr
 	}
 	if ac.Patches.Len() > 0 {
 		_, autoConfirmer := confirmer.(confirm.AutoConfirmer)
@@ -1033,6 +1054,7 @@ func main() {
 		for range sigs {
 			if !lastSig.IsZero() && time.Since(lastSig) < time.Second {
 				fmt.Println("\nbye.")
+				feedback.Wait(5 * time.Second) // give a just-finished task's feedback POST a chance to land
 				os.Exit(0)
 			}
 			lastSig = time.Now()
@@ -1048,6 +1070,7 @@ func main() {
 				// on Ctrl+C at the idle prompt if the queue is non-empty, rather than
 				// exiting silently and losing queued tasks.
 				fmt.Println("\nbye.")
+				feedback.Wait(5 * time.Second) // give a just-finished task's feedback POST a chance to land
 				os.Exit(0)
 			}
 		}
@@ -1206,7 +1229,9 @@ func main() {
 				ToolCallerContextTokens: cfg.Limits.ToolCallerContextTokens,
 				CompactorContextTokens:  cfg.Limits.CompactorContextTokens,
 			},
-			Debug:   *debugFlag,
+			Debug:           *debugFlag,
+			FeedbackEnabled: cfg.FeedbackEnabled,
+			FeedbackBaseURL: cfg.CostguardURL,
 		}
 		resumePreApproved := confirm.ParseAllowedTools(*allowedToolsFlag)
 		if resumePreApproved == nil {
@@ -1232,6 +1257,13 @@ func main() {
 		resumeAgent := agent.New(resumeAgentCfg, client, resumeRegistry, emitter, resumeConfirmer, comp, os.Stdin, os.Stderr, mcpClients)
 
 		runErr := resumeAgent.Run(resumeCtx, ac)
+		var resumeTaskFailed *agent.ErrTaskFailed
+		if runErr != nil && !errors.As(runErr, &resumeTaskFailed) {
+			resumeAgent.PostTaskError(ac, runErr)
+		}
+		// This block ends in os.Exit(), which would otherwise kill any
+		// feedback POST (posted above or inside Run() on success) mid-flight.
+		feedback.Wait(5 * time.Second)
 		if runErr == nil && ac.Patches.Len() > 0 {
 			_, autoC := resumeConfirmer.(confirm.AutoConfirmer)
 			runGitWorkflow(resumeCtx, ac, resumeRegistry, emitter, autoC || sessionMode == mode.ModeAutonomous) //nolint:errcheck
@@ -1384,6 +1416,7 @@ func main() {
 		case in := <-lineCh:
 			if in.err != nil {
 				fmt.Println("\nbye.")
+				feedback.Wait(5 * time.Second) // give a just-finished task's feedback POST a chance to land
 				return
 			}
 			line := in.text
