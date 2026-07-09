@@ -586,7 +586,7 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 				SessionID: ac.SessionID,
 				Payload:   map[string]any{"session_id": ac.SessionID, "summary": summary, "iterations": ac.Iteration},
 			})
-			feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, feedback.TaskOutcome{
+			feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, a.cfg.Debug, feedback.TaskOutcome{
 				SessionID:       ac.SessionID,
 				TaskFingerprint: feedback.Fingerprint(ac.Task.RawInput),
 				Category:        string(ac.Task.Category),
@@ -614,7 +614,7 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 				SessionID: ac.SessionID,
 				Payload:   map[string]any{"session_id": ac.SessionID, "reason": reason, "iterations": ac.Iteration},
 			})
-			feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, feedback.TaskOutcome{
+			feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, a.cfg.Debug, feedback.TaskOutcome{
 				SessionID:       ac.SessionID,
 				TaskFingerprint: feedback.Fingerprint(ac.Task.RawInput),
 				Category:        string(ac.Task.Category),
@@ -725,7 +725,7 @@ func (a *Agent) PostTaskError(ac *AgentContext, err error) {
 	if errors.Is(err, context.Canceled) {
 		status = "cancelled"
 	}
-	feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, feedback.TaskOutcome{
+	feedback.PostOutcome(a.feedbackEnabled, a.feedbackBaseURL, a.feedbackAPIKey, a.cfg.Debug, feedback.TaskOutcome{
 		SessionID:       ac.SessionID,
 		TaskFingerprint: feedback.Fingerprint(ac.Task.RawInput),
 		Category:        string(ac.Task.Category),

@@ -25,6 +25,10 @@ var inFlight sync.WaitGroup
 //
 // baseURL is cfg.CostguardURL (e.g. "http://localhost:8080").
 // apiKey is cfg.CostguardAPIKey (may be empty for local Costguard).
+// debug mirrors the --debug flag: when true, a successful POST also prints a
+// one-line confirmation to stderr (mirroring [costguard]'s trace style) so
+// FORGE_FEEDBACK_ENABLED can be verified without needing visibility into the
+// Costguard server. Failures are always logged regardless of debug.
 //
 // PostOutcome is a no-op if enabled is false — callers do not need to
 // check the flag themselves; this keeps call sites clean.
@@ -32,7 +36,7 @@ var inFlight sync.WaitGroup
 // TODO: retry once (after ~2s) on transient network errors once the
 // /v1/feedback endpoint is considered stable — excluded here to keep the
 // implementation simple for v1.
-func PostOutcome(enabled bool, baseURL, apiKey string, outcome TaskOutcome) {
+func PostOutcome(enabled bool, baseURL, apiKey string, debug bool, outcome TaskOutcome) {
 	if !enabled {
 		return
 	}
@@ -69,6 +73,11 @@ func PostOutcome(enabled bool, baseURL, apiKey string, outcome TaskOutcome) {
 		defer resp.Body.Close()
 		if resp.StatusCode >= 400 {
 			fmt.Fprintf(os.Stderr, "[feedback] server returned %d for /v1/feedback\n", resp.StatusCode)
+			return
+		}
+		if debug {
+			fmt.Fprintf(os.Stderr, "[feedback] posted outcome for session %s: status=%s tokens=%d (http %d)\n",
+				outcome.SessionID, outcome.Status, outcome.TotalTokensUsed, resp.StatusCode)
 		}
 	}()
 }

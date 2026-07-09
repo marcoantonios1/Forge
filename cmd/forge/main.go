@@ -88,6 +88,19 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 	sessionID := session.NewID()
 	cwd, _ := os.Getwd()
 
+	// 2b. Config — loaded early (moved up from its original step 5 spot) so
+	// FORGE_DEBUG (env var, read into appCfg.Debug) can be folded into the
+	// debug flag before the renderer below decides whether to emit debug
+	// events. Previously FORGE_DEBUG only gated [costguard] tracing — every
+	// other subsystem (compiler/agent/reviewer/memory/context/feedback/the
+	// renderer itself) only responded to the separate --debug CLI flag.
+	appCfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		return 1
+	}
+	debug = debug || appCfg.Debug
+
 	// 3. Renderer — events go to stderr so stdout is clean for --output json.
 	renderer := ui.New(os.Stderr, ui.ModePlain)
 	var emitter events.Emitter = renderer
@@ -123,11 +136,6 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 	}
 
 	// 5. Costguard client + compiler.
-	appCfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
-		return 1
-	}
 	cgClient := costguard.New(appCfg)
 	comp := compiler.New(cgClient, appCfg.CompilerModel, debug)
 
