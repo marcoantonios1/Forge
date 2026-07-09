@@ -195,13 +195,19 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 			ToolCallerContextTokens: appCfg.Limits.ToolCallerContextTokens,
 			CompactorContextTokens:  appCfg.Limits.CompactorContextTokens,
 		},
-		AutoApply: true,
-		Debug:     debug,
+		AutoApply:       true,
+		Debug:           debug,
+		FeedbackEnabled: appCfg.FeedbackEnabled,
+		FeedbackBaseURL: appCfg.CostguardURL,
 	}
 	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer, nil, nil, nil, mcpClients)
 
 	// 8. Run the agent.
 	runErr := ag.Run(ctx, ac)
+	var taskFailed *agent.ErrTaskFailed
+	if runErr != nil && !errors.As(runErr, &taskFailed) {
+		ag.PostTaskError(ac, runErr)
+	}
 
 	// Print timeline after agent finishes (stderr — keep stdout clean for --output json).
 	if tc != nil {
