@@ -38,6 +38,8 @@ const (
 
 	EventMCPConnected EventType = "mcp.connected"
 	EventMCPError     EventType = "mcp.error"
+
+	EventModelEscalated EventType = "model.escalated"
 )
 
 type Event struct {
@@ -206,6 +208,24 @@ func MCPErrorEvent(sessionID, serverName, reason string) Event {
 		Payload: map[string]any{
 			"session_id": sessionID,
 			"server":     serverName,
+			"reason":     reason,
+		},
+	}
+}
+
+// ModelEscalatedEvent builds a model.escalated event. role is a plain string
+// (not agent.ModelRole) since events.go must not import internal/agent —
+// callers cast their ModelRole to string at the call site.
+func ModelEscalatedEvent(sessionID, role, from, to, reason string) Event {
+	return Event{
+		Type:      EventModelEscalated,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Payload: map[string]any{
+			"session_id": sessionID,
+			"role":       role,
+			"from":       from,
+			"to":         to,
 			"reason":     reason,
 		},
 	}

@@ -99,6 +99,8 @@ func (r *Renderer) Emit(e events.Event) {
 		line = formatMCPConnected(e, r.colour)
 	case events.EventMCPError:
 		line = formatMCPError(e, r.colour)
+	case events.EventModelEscalated:
+		line = formatModelEscalated(e, r.colour)
 	case events.EventConfirmDecision:
 		decision, _ := e.Payload["decision"].(string)
 		files := extractStringSlice(e.Payload["files"])

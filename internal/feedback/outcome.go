@@ -36,9 +36,12 @@ type TaskOutcome struct {
 	TotalTokensUsed int   `json:"total_tokens_used"` // sum across all Costguard calls in this task
 	DurationMs      int64 `json:"duration_ms"`
 
-	// Routing metadata
-	PlannerModel string `json:"planner_model"`
-	CoderModel   string `json:"coder_model"`
+	// Routing metadata — configured model vs actually-used model (may differ
+	// when escalation triggered by low pass rate or mid-session retry limit).
+	PlannerModel       string `json:"planner_model"`        // configured
+	CoderModel         string `json:"coder_model"`          // configured
+	ActualPlannerModel string `json:"actual_planner_model"` // used (may be fallback)
+	ActualCoderModel   string `json:"actual_coder_model"`   // used (may be fallback)
 
 	// Timestamp
 	Timestamp time.Time `json:"timestamp"`
