@@ -50,6 +50,17 @@ type Config struct {
 	Limits            ModelLimits
 	FeedbackEnabled   bool   // FORGE_FEEDBACK_ENABLED=true — off by default
 	FeedbackAPIKey    string // FEEDBACK_API_KEY — sent as "Authorization: Bearer <key>" on /v1/feedback POSTs and /v1/feedback/stats GETs; empty = no auth header
+
+	// Fallback models — escalated to when a role's reviewer pass rate falls
+	// below its threshold. Empty = no escalation for that role.
+	PlannerFallbackModel  string // FORGE_PLANNER_FALLBACK_MODEL
+	CoderFallbackModel    string // FORGE_CODER_FALLBACK_MODEL
+	ReviewerFallbackModel string // FORGE_REVIEWER_FALLBACK_MODEL
+
+	// FallbackThreshold — reviewer pass rate (0.0-1.0) below which pre-emptive
+	// escalation triggers at session start. Applied to all roles uniformly.
+	// Default: 0.60 (i.e. 60% pass rate threshold).
+	FallbackThreshold float64 // FORGE_FALLBACK_THRESHOLD
 }
 
 // loadDotEnv reads .env from the current directory and sets any variables
@@ -254,6 +265,21 @@ if v := os.Getenv("COSTGUARD_AGENT"); v != "" {
 	}
 	if v := os.Getenv("FEEDBACK_API_KEY"); v != "" {
 		cfg.FeedbackAPIKey = v
+	}
+	if v := os.Getenv("FORGE_PLANNER_FALLBACK_MODEL"); v != "" {
+		cfg.PlannerFallbackModel = v
+	}
+	if v := os.Getenv("FORGE_CODER_FALLBACK_MODEL"); v != "" {
+		cfg.CoderFallbackModel = v
+	}
+	if v := os.Getenv("FORGE_REVIEWER_FALLBACK_MODEL"); v != "" {
+		cfg.ReviewerFallbackModel = v
+	}
+	cfg.FallbackThreshold = 0.60 // default
+	if v := os.Getenv("FORGE_FALLBACK_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f <= 1 {
+			cfg.FallbackThreshold = f
+		}
 	}
 
 	return cfg, nil
