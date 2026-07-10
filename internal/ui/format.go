@@ -262,6 +262,17 @@ func formatMCPError(e events.Event, colour bool) string {
 	return fmt.Sprintf("  %s  %s  %s  error: %s", g, label, server, reason)
 }
 
+func formatModelEscalated(e events.Event, colour bool) string {
+	role := str(e.Payload, "role")
+	from := str(e.Payload, "from")
+	to := str(e.Payload, "to")
+	reason := str(e.Payload, "reason")
+	g := glyph("⬆", "^", colour)
+	arrow := Colour("→", Yellow, colour)
+	roleLabel := Colour(role, Cyan, colour)
+	return fmt.Sprintf("  %s  Escalating %s: %s %s %s  (reason: %s)", g, roleLabel, from, arrow, to, reason)
+}
+
 func extractStringSlice(v any) []string {
 	switch s := v.(type) {
 	case []string:

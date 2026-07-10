@@ -208,11 +208,15 @@ func runHeadless(rawTask, outputFmt string, debug bool, sessionMode mode.Session
 			ToolCallerContextTokens: appCfg.Limits.ToolCallerContextTokens,
 			CompactorContextTokens:  appCfg.Limits.CompactorContextTokens,
 		},
-		AutoApply:       true,
-		Debug:           debug,
-		FeedbackEnabled: appCfg.FeedbackEnabled,
-		FeedbackBaseURL: appCfg.CostguardURL,
-		FeedbackAPIKey:  appCfg.FeedbackAPIKey,
+		AutoApply:             true,
+		Debug:                 debug,
+		FeedbackEnabled:       appCfg.FeedbackEnabled,
+		FeedbackBaseURL:       appCfg.CostguardURL,
+		FeedbackAPIKey:        appCfg.FeedbackAPIKey,
+		PlannerFallbackModel:  appCfg.PlannerFallbackModel,
+		CoderFallbackModel:    appCfg.CoderFallbackModel,
+		ReviewerFallbackModel: appCfg.ReviewerFallbackModel,
+		FallbackThreshold:     appCfg.FallbackThreshold,
 	}
 	ag := agent.New(agentCfg, cgClient, registry, emitter, confirmer, nil, nil, nil, mcpClients)
 
@@ -532,10 +536,14 @@ func runTask(
 			ToolCallerContextTokens: cfg.Limits.ToolCallerContextTokens,
 			CompactorContextTokens:  cfg.Limits.CompactorContextTokens,
 		},
-		Debug:           debug,
-		FeedbackEnabled: cfg.FeedbackEnabled,
-		FeedbackBaseURL: cfg.CostguardURL,
-		FeedbackAPIKey:  cfg.FeedbackAPIKey,
+		Debug:                 debug,
+		FeedbackEnabled:       cfg.FeedbackEnabled,
+		FeedbackBaseURL:       cfg.CostguardURL,
+		FeedbackAPIKey:        cfg.FeedbackAPIKey,
+		PlannerFallbackModel:  cfg.PlannerFallbackModel,
+		CoderFallbackModel:    cfg.CoderFallbackModel,
+		ReviewerFallbackModel: cfg.ReviewerFallbackModel,
+		FallbackThreshold:     cfg.FallbackThreshold,
 	}
 
 	// Merge --allowed-tools with the session mode's auto-approved categories.
@@ -1456,10 +1464,14 @@ func main() {
 				ToolCallerContextTokens: cfg.Limits.ToolCallerContextTokens,
 				CompactorContextTokens:  cfg.Limits.CompactorContextTokens,
 			},
-			Debug:           *debugFlag,
-			FeedbackEnabled: cfg.FeedbackEnabled,
-			FeedbackBaseURL: cfg.CostguardURL,
-			FeedbackAPIKey:  cfg.FeedbackAPIKey,
+			Debug:                 *debugFlag,
+			FeedbackEnabled:       cfg.FeedbackEnabled,
+			FeedbackBaseURL:       cfg.CostguardURL,
+			FeedbackAPIKey:        cfg.FeedbackAPIKey,
+			PlannerFallbackModel:  cfg.PlannerFallbackModel,
+			CoderFallbackModel:    cfg.CoderFallbackModel,
+			ReviewerFallbackModel: cfg.ReviewerFallbackModel,
+			FallbackThreshold:     cfg.FallbackThreshold,
 		}
 		resumePreApproved := confirm.ParseAllowedTools(*allowedToolsFlag)
 		if resumePreApproved == nil {

@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcoantonios1/Forge/internal/compiler"
@@ -75,6 +78,10 @@ type Config struct {
 	FeedbackEnabled       bool
 	FeedbackBaseURL       string
 	FeedbackAPIKey        string
+	PlannerFallbackModel  string
+	CoderFallbackModel    string
+	ReviewerFallbackModel string
+	FallbackThreshold     float64 // 0.0-1.0; zero value means "use default 0.60"
 	// TODO: expose stuck-window sizes (tool call/result/response history
 	// lengths) as additional Config fields for fine-grained tuning.
 	// TODO: wire CompilerMaxTokens into compiler.Compile() if/when its calls
@@ -183,6 +190,14 @@ func (c Config) ReviewEnabled() bool {
 	return !c.ReviewerExplicitlyOff
 }
 
+// effectiveFallbackThreshold returns the configured threshold or 0.60 if unset.
+func (c Config) effectiveFallbackThreshold() float64 {
+	if c.FallbackThreshold > 0 {
+		return c.FallbackThreshold
+	}
+	return 0.60
+}
+
 // PatchConfirmer abstracts user confirmation for patches.
 // Autonomous mode: always returns true. Supervised/safe: prompts the user.
 type PatchConfirmer interface {
@@ -203,6 +218,14 @@ type Agent struct {
 	feedbackEnabled bool
 	feedbackBaseURL string
 	feedbackAPIKey  string
+
+	// escalated holds the actively-used model for each role when escalation
+	// has been triggered. Missing/empty entries mean "use cfg.*Model as normal".
+	// Guarded by escalateMu since escalateIfNeeded may be called from
+	// handlePatch which is already inside the agent loop goroutine — no
+	// cross-goroutine access currently, but guarded for safety.
+	escalated  map[ModelRole]string
+	escalateMu sync.Mutex
 }
 
 func New(
@@ -233,6 +256,8 @@ func New(
 		feedbackEnabled: cfg.FeedbackEnabled,
 		feedbackBaseURL: cfg.FeedbackBaseURL,
 		feedbackAPIKey:  cfg.FeedbackAPIKey,
+
+		escalated: make(map[ModelRole]string),
 	}
 }
 
@@ -241,6 +266,143 @@ func New(
 type ErrTaskFailed struct{ Reason string }
 
 func (e *ErrTaskFailed) Error() string { return "agent: task failed: " + e.Reason }
+
+// selectActiveModel returns the model to use for a given role, checking the
+// escalation table before falling through to the static config selection.
+func (a *Agent) selectActiveModel(role ModelRole) string {
+	a.escalateMu.Lock()
+	if m, ok := a.escalated[role]; ok && m != "" {
+		a.escalateMu.Unlock()
+		return m
+	}
+	a.escalateMu.Unlock()
+	return a.cfg.selectModel(role)
+}
+
+// fallbackForRole returns the configured fallback model for a role, or "".
+func (a *Agent) fallbackForRole(role ModelRole) string {
+	switch role {
+	case RolePlanner:
+		return a.cfg.PlannerFallbackModel
+	case RoleCoder:
+		return a.cfg.CoderFallbackModel
+	case RoleReviewer:
+		return a.cfg.ReviewerFallbackModel
+	default:
+		return ""
+	}
+}
+
+// escalateRole switches a role to its fallback model for the remainder of the
+// session and emits ModelEscalatedEvent. No-op if no fallback is configured
+// for that role or the role is already escalated.
+func (a *Agent) escalateRole(ac *AgentContext, role ModelRole, reason string) {
+	fallback := a.fallbackForRole(role)
+	if fallback == "" {
+		return // no fallback configured — cannot escalate
+	}
+	a.escalateMu.Lock()
+	if a.escalated[role] != "" {
+		a.escalateMu.Unlock()
+		return // already escalated
+	}
+	from := a.cfg.selectModel(role)
+	a.escalated[role] = fallback
+	a.escalateMu.Unlock()
+
+	a.emitter.Emit(events.ModelEscalatedEvent(ac.SessionID, string(role), from, fallback, reason))
+	if a.cfg.Debug {
+		fmt.Fprintf(os.Stderr, "[escalation] %s: %s → %s (reason: %s)\n",
+			role, from, fallback, reason)
+	}
+}
+
+// fetchAndEscalate fetches reviewer pass rate stats from Costguard for each
+// role that has a fallback configured, and pre-emptively escalates roles whose
+// pass rate is below the threshold. Non-blocking in effect: any failure
+// (network, 404, feedback disabled) is silently skipped — escalation is
+// best-effort.
+//
+// TODO: run fetchAndEscalate in a background goroutine with a done channel,
+// letting the agent start immediately and applying escalation only if stats
+// come back before the first planner call. This avoids any startup latency
+// at the cost of a narrow window where the first call might use the
+// non-escalated model.
+func (a *Agent) fetchAndEscalate(ctx context.Context, ac *AgentContext) {
+	if !a.feedbackEnabled {
+		return
+	}
+	// Only escalate roles that have a fallback configured — no point fetching
+	// stats for roles where we can't do anything with the result.
+	var rolesToCheck []ModelRole
+	if a.cfg.PlannerFallbackModel != "" {
+		rolesToCheck = append(rolesToCheck, RolePlanner)
+	}
+	if a.cfg.CoderFallbackModel != "" {
+		rolesToCheck = append(rolesToCheck, RoleCoder)
+	}
+	if a.cfg.ReviewerFallbackModel != "" {
+		rolesToCheck = append(rolesToCheck, RoleReviewer)
+	}
+	if len(rolesToCheck) == 0 {
+		return
+	}
+
+	threshold := a.cfg.effectiveFallbackThreshold()
+	fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	for _, role := range rolesToCheck {
+		model := a.cfg.selectModel(role) // configured model, not escalated
+		passRate, ok := a.fetchPassRate(fetchCtx, model, string(role))
+		if !ok {
+			continue // stats unavailable — skip, don't escalate
+		}
+		if passRate < threshold {
+			a.escalateRole(ac, role, "low_pass_rate")
+		}
+	}
+}
+
+// fetchPassRate queries Costguard's GET /v1/feedback/stats?model=X&role=Y
+// and returns the reviewer_pass_rate field. Returns (0, false) on any error
+// or if the stats endpoint is unavailable.
+//
+// Uses its own http.DefaultClient with the caller-supplied context's timeout
+// — it must not share or interfere with the existing costguard.Client retry
+// loop, which is tuned for chat completions, not a quick status check.
+func (a *Agent) fetchPassRate(ctx context.Context, model, role string) (float64, bool) {
+	params := url.Values{}
+	params.Set("model", model)
+	if role != "" {
+		params.Set("role", role)
+	}
+	statsURL := strings.TrimRight(a.feedbackBaseURL, "/") + "/v1/feedback/stats?" + params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, statsURL, nil)
+	if err != nil {
+		return 0, false
+	}
+	req.Header.Set("Accept", "application/json")
+	if a.feedbackAPIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+a.feedbackAPIKey)
+	}
+	req.Header.Set("X-Costguard-Agent", "forge")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return 0, false
+	}
+	defer resp.Body.Close()
+
+	var stats struct {
+		ReviewerPassRate float64 `json:"reviewer_pass_rate"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		return 0, false
+	}
+	return stats.ReviewerPassRate, true
+}
 
 // stuckState tracks a rolling window of recent agent activity to detect
 // loops the backstop iteration limit would otherwise take much longer to catch.
@@ -396,7 +558,7 @@ func (a *Agent) trimHistory(
 //
 // Never returns an error — Costguard failures produce a placeholder string.
 func (a *Agent) summarizeHistory(ctx context.Context, ac *AgentContext, history []costguard.Message) string {
-	compactorModel := a.cfg.selectModel(RoleCompactor)
+	compactorModel := a.selectActiveModel(RoleCompactor)
 	compactorLimit := a.cfg.contextLimitForRole(RoleCompactor)
 
 	chunks := chunkMessages(history, compactorLimit)
@@ -469,6 +631,11 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 		}
 	}
 
+	// Step 0.6 — pre-emptive escalation based on live Costguard reviewer
+	// pass rate stats (best-effort; no-op if feedback is disabled or no
+	// fallback models are configured).
+	a.fetchAndEscalate(ctx, ac)
+
 	// Step 1a — stash dirty working tree and pull latest (best-effort).
 	a.prepareRepo(ctx, ac)
 
@@ -523,7 +690,7 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 			useCoderNext = false
 		}
 		messages := a.trimHistory(ctx, ac, baseMessages, plannerRole)
-		plannerModel := a.cfg.selectModel(plannerRole)
+		plannerModel := a.selectActiveModel(plannerRole)
 		a.logCall(ac, plannerRole, plannerModel)
 
 		resp, err := a.client.Chat(ctx, costguard.ChatRequest{
@@ -599,9 +766,11 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 				UserAccepted:    !a.cfg.AutoApply, // AutoApply=true means autonomous (no user decision)
 				TotalTokensUsed: ac.TotalTokensUsed,
 				DurationMs:      time.Since(ac.StartedAt).Milliseconds(),
-				PlannerModel:    a.cfg.PlannerModel,
-				CoderModel:      a.cfg.CoderModel,
-				Timestamp:       time.Now(),
+				PlannerModel:       a.cfg.PlannerModel,
+				CoderModel:         a.cfg.CoderModel,
+				ActualPlannerModel: a.selectActiveModel(RolePlanner),
+				ActualCoderModel:   a.selectActiveModel(RoleCoder),
+				Timestamp:          time.Now(),
 			})
 			return nil
 
@@ -626,9 +795,11 @@ func (a *Agent) Run(ctx context.Context, ac *AgentContext) error {
 				ReviewRetries:   ac.ReviewRetries,
 				TotalTokensUsed: ac.TotalTokensUsed,
 				DurationMs:      time.Since(ac.StartedAt).Milliseconds(),
-				PlannerModel:    a.cfg.PlannerModel,
-				CoderModel:      a.cfg.CoderModel,
-				Timestamp:       time.Now(),
+				PlannerModel:       a.cfg.PlannerModel,
+				CoderModel:         a.cfg.CoderModel,
+				ActualPlannerModel: a.selectActiveModel(RolePlanner),
+				ActualCoderModel:   a.selectActiveModel(RoleCoder),
+				Timestamp:          time.Now(),
 			})
 			return &ErrTaskFailed{Reason: reason}
 
@@ -737,9 +908,11 @@ func (a *Agent) PostTaskError(ac *AgentContext, err error) {
 		ReviewRetries:   ac.ReviewRetries,
 		TotalTokensUsed: ac.TotalTokensUsed,
 		DurationMs:      time.Since(ac.StartedAt).Milliseconds(),
-		PlannerModel:    a.cfg.PlannerModel,
-		CoderModel:      a.cfg.CoderModel,
-		Timestamp:       time.Now(),
+		PlannerModel:       a.cfg.PlannerModel,
+		CoderModel:         a.cfg.CoderModel,
+		ActualPlannerModel: a.selectActiveModel(RolePlanner),
+		ActualCoderModel:   a.selectActiveModel(RoleCoder),
+		Timestamp:          time.Now(),
 	})
 }
 
@@ -768,6 +941,14 @@ func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response stri
 		ac.History = append(ac.History, userMsg(
 			"Patch validation failed:\n"+strings.Join(msgs, "\n")+"\nPlease fix and resubmit."))
 		return nil
+	}
+
+	// Mid-session escalation: if the coder has been reviewed and rejected too
+	// many times, escalate to the fallback model for this and future patches.
+	// TODO: make midSessionRetryThreshold configurable via env var if a fixed
+	// value of 3 proves too rigid in practice.
+	if ac.ReviewRetries > midSessionRetryThreshold {
+		a.escalateRole(ac, RoleCoder, "session_retries_exceeded")
 	}
 
 	// Reviewer gate: runs regardless of execution_policy, including autonomous.
@@ -847,6 +1028,11 @@ func (a *Agent) handlePatch(ctx context.Context, ac *AgentContext, response stri
 }
 
 const maxReviewRetries = 2
+
+// midSessionRetryThreshold is the ReviewRetries count above which the coder
+// role escalates to its fallback model for the remainder of the session.
+// Hardcoded rather than env-configurable — see the TODO at its call site.
+const midSessionRetryThreshold = 3
 
 const writeFilePreviewMaxLines = 100
 
@@ -951,7 +1137,7 @@ func (a *Agent) reviewPatch(ctx context.Context, ac *AgentContext, diffText stri
 		"Task:\n%s\n\nProject conventions (forge.md):\n%s\n\nProposed diff:\n%s",
 		string(taskJSON), conventions, diffText)
 
-	reviewerModel := a.cfg.selectModel(RoleReviewer)
+	reviewerModel := a.selectActiveModel(RoleReviewer)
 	a.logCall(ac, RoleReviewer, reviewerModel)
 
 	resp, err := a.client.Chat(ctx, costguard.ChatRequest{
@@ -1032,7 +1218,7 @@ func (a *Agent) clarify(ctx context.Context, ac *AgentContext) *compiler.Task {
 	}
 
 	// One-shot LLM call to check for FORGE_CLARIFY.
-	plannerModel := a.cfg.selectModel(RolePlanner)
+	plannerModel := a.selectActiveModel(RolePlanner)
 	a.logCall(ac, RolePlanner, plannerModel)
 	clarifyMsgs := []costguard.Message{
 		SystemMessage(ac.ProjectConfig, ac.Memory, a.mcpClients),
@@ -1166,7 +1352,7 @@ func (a *Agent) advanceIteration(ac *AgentContext) error {
 // (expected to start with "TOOL:") or an error if the call fails or the response
 // doesn't look like a tool call.
 func (a *Agent) resolveIntent(ctx context.Context, ac *AgentContext, intent string) (string, error) {
-	toolCallerModel := a.cfg.selectModel(RoleToolCaller)
+	toolCallerModel := a.selectActiveModel(RoleToolCaller)
 	a.logCall(ac, RoleToolCaller, toolCallerModel)
 
 	req := costguard.ChatRequest{
