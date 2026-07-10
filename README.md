@@ -162,9 +162,9 @@ Runs one task non-interactively (always autonomous — no prompts), prints a res
 forge init                        # generate a starter forge.md from filesystem heuristics
 forge memory show                 # print the current session memory
 forge memory clear                # wipe the memory for this repo
-forge sessions list                # list the last saved session for every known repo
+forge sessions list               # list the last saved session for every known repo
 forge logs show <session-id>      # pretty-print the audit log for an autonomous session
-forge stats [flags]                # show quality/cost stats from collected task feedback
+forge stats [flags]               # show quality/cost stats from collected task feedback
 ```
 
 ### forge stats
@@ -309,6 +309,36 @@ Allow? [y]es / [n]o / [a]ll session for mcp
 ```
 
 In `balanced` and `autonomous` modes, MCP tools are auto-approved.
+
+## Model quality feedback loop
+
+Forge can report how well each configured model is actually doing — completion rate, reviewer pass rate, retries, latency — and use that to automatically route around a model that's underperforming. This is entirely opt-in and has three parts:
+
+**1. Feedback collection.** Set `FORGE_FEEDBACK_ENABLED=true` and every task, on completion (success, failure, or cancellation), POSTs a `TaskOutcome` — token usage, iteration count, reviewer retries, duration, and which models were actually used — to `<COSTGUARD_URL>/v1/feedback`. This runs in a background goroutine with a bounded wait on exit, so it never blocks or slows down a task; if the endpoint isn't implemented yet on your Costguard instance, or is unreachable, Forge logs a warning and moves on. Set `FEEDBACK_API_KEY` if your Costguard instance requires auth.
+
+**2. `forge stats`.** Once Costguard has aggregated some feedback, [`forge stats`](#forge-stats) surfaces it as a table — see above for flags and example output.
+
+**3. Adaptive model escalation.** If a role's reviewer pass rate is below a configured threshold, Forge automatically switches that role to a fallback model — pre-emptively at session start (checked against live Costguard stats) and mid-session (if the coder gets rejected by the reviewer more than 3 times on one task). Escalation is per-role, one-way for the session (it won't escalate the same role twice), and surfaces as:
+
+```
+⬆  Escalating coder: qwen3-coder:30b → claude-sonnet-4-6  (reason: low_pass_rate)
+```
+
+The `TaskOutcome` sent to Costguard records both the configured model (`coder_model`) and the model actually used (`actual_coder_model`), so escalated tasks remain attributable.
+
+Minimal config to enable all three:
+
+```bash
+FORGE_FEEDBACK_ENABLED=true
+FEEDBACK_API_KEY=                        # only if your Costguard requires it
+
+FORGE_CODER_FALLBACK_MODEL=claude-sonnet-4-6
+FORGE_PLANNER_FALLBACK_MODEL=
+FORGE_REVIEWER_FALLBACK_MODEL=
+FORGE_FALLBACK_THRESHOLD=0.60            # escalate below 60% reviewer pass rate
+```
+
+Leaving a role's `*_FALLBACK_MODEL` blank disables escalation for that role entirely — no stats fetch, no possibility of switching models — regardless of `FORGE_FALLBACK_THRESHOLD`.
 
 ## Tools available to the agent
 
