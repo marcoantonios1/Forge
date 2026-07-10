@@ -162,9 +162,37 @@ Runs one task non-interactively (always autonomous — no prompts), prints a res
 forge init                        # generate a starter forge.md from filesystem heuristics
 forge memory show                 # print the current session memory
 forge memory clear                # wipe the memory for this repo
-forge sessions list               # list the last saved session for every known repo
+forge sessions list                # list the last saved session for every known repo
 forge logs show <session-id>      # pretty-print the audit log for an autonomous session
+forge stats [flags]                # show quality/cost stats from collected task feedback
 ```
+
+### forge stats
+
+Requires `FORGE_FEEDBACK_ENABLED=true` (see [Model quality feedback loop](#model-quality-feedback-loop)) and at least one completed task, since it reads aggregates Costguard has computed from `TaskOutcome` feedback.
+
+```bash
+forge stats [--role <role>] [--model <model>] [--last <n>] [--json]
+```
+
+| Flag | Description |
+|---|---|
+| `--role` | Filter to one model role: `planner`, `coder`, `reviewer`, `compactor`, `tool_caller` |
+| `--model` | Filter to one model name |
+| `--last` | Limit to the last N tasks |
+| `--json` | Print the raw Costguard response instead of a table |
+
+Example output:
+
+```
+$ forge stats --role coder
+ROLE              MODEL                             TASKS     SUCCESS %     REVIEWER PASS %  AVG RETRIES    AVG LATENCY
+────────────────────────────────────────────────────────────────────────────────────────────────────
+coder             claude-sonnet-4-6                     58         91.4%               84.5%          0.4         6300ms
+coder             qwen3-coder:30b                        22         77.3%               61.0%          1.1         9800ms
+```
+
+With `FORGE_FEEDBACK_ENABLED` unset, `forge stats` explains how to enable feedback collection instead of erroring. If Costguard is unreachable, or doesn't yet implement `/v1/feedback/stats`, `forge stats` says so plainly rather than printing a raw HTTP error.
 
 ### forge.md
 
